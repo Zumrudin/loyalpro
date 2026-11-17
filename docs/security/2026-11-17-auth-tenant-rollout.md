@@ -15,7 +15,7 @@ Dev-выкладка выполнена; результат ниже. Production
 - Cleanup: synthetic users/salons/messages удалены, агрегаты PostgreSQL MCP residue0; файл и созданные пустые каталоги удалены. Новые runtime ERROR/fatal/MaxListeners0. Полный Jest, живой OTP, реальные пациентские сообщения/записи и CLI сброс реального пользователя не запускались.
 - Артефакты проверки (private0700): `/tmp/loyalpro-auth-tenant-dev/`; live fixture script и browser hook содержат только синтетические сценарии, временный файл с сессией удалён.
 
-Для будущего production rollout отдельно проверить физическое расположение gateway-файлов и возможный reverse-tunnel/alias: положительный dev download не доказывает доступ нового backend route к production-хранилищу. Защитные nginx правила и приложение должны выпускаться согласованно.
+Production topology проверена: gateway files расположены на dev, private nginx alias `/var/lib/loyalpro-prod-gateway/public-files/` доступен production через reverse SSH tunnel `127.0.0.1:3103`. Для этого добавлен `GATEWAY_FILES_ORIGIN=http://127.0.0.1:3103`: только этот origin, без redirects, flat ASCII filename/account path, deadline60s; запрос после session/role/message/account/salon проверки. Внешние headers/ошибки upstream не передаются; safe MIME/no-store задаёт приложение. Без переменной остаётся локальный realpath-путь dev. Публичный nginx proxy `/uploads/gateway/` при rollout заменяется на404, private relay сохраняется. Синтетический файл через фактический tunnel получен и удалён; реальные вложения не читались.
 
 ## До переключения
 

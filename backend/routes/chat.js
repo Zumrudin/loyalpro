@@ -19,6 +19,8 @@ const logger = createLogger('Chat');
 const { safeErrorCode } = require('../utils/safe-error');
 const path = require('path');
 const fs = require('fs');
+const { pipeline } = require('stream/promises');
+const gatewayAttachmentSource = require('../services/gateway-attachment-source');
 
 const chatEvents = require('../services/chat-events');
 const { persistWhatsappOutgoing } = require('../services/chat-persist');
@@ -242,8 +244,18 @@ router.get('/attachments/:messageId', adminOnly, async (req, res) => {
       WHERE cm.id = $1 AND cm.salon_id = $2 AND cm.provider = 'gateway'
       LIMIT 1
     `, [messageId, req.user.salonId]);
-    const filePath = row && await resolveGatewayAttachment(row.file_url, row.account_id);
-    if (!filePath) return res.status(404).end();
+    if (!row || !gatewayAttachmentPath(row.file_url, row.account_id)) return res.status(404).end();
+    let remote = null;
+    let filePath = null;
+    if (config.GATEWAY_FILES_ORIGIN) {
+      remote = await gatewayAttachmentSource.openRemoteAttachment(
+        config.GATEWAY_FILES_ORIGIN, row.file_url, row.account_id);
+      if (remote.status === 'missing') return res.status(404).end();
+      if (remote.status !== 'ok') return res.status(503).json({ error: 'Вложение временно недоступно' });
+    } else {
+      filePath = await resolveGatewayAttachment(row.file_url, row.account_id);
+      if (!filePath) return res.status(404).end();
+    }
     const mimeType = String(row.mime_type || '').toLowerCase().split(';')[0].trim();
     const inline = INLINE_ATTACHMENT_MIMES.has(mimeType);
     res.set({
@@ -252,11 +264,27 @@ router.get('/attachments/:messageId', adminOnly, async (req, res) => {
       'Content-Type': inline ? mimeType : 'application/octet-stream',
       'Content-Disposition': inline ? 'inline' : 'attachment',
     });
+    if (remote) {
+      try {
+        await pipeline(remote.stream, res);
+      } catch (_) {
+        // pipeline destroys its destination on failure. Do not attempt a
+        // second response with attachment MIME headers already selected.
+        if (!res.destroyed) res.destroy();
+      } finally {
+        remote.close();
+      }
+      return;
+    }
     return res.sendFile(filePath, err => {
       if (err && !res.headersSent) res.status(err.code === 'ENOENT' ? 404 : 500).end();
     });
   } catch (e) {
     logger.error(`attachment download failed: ${safeErrorCode(e)}`);
+    if (res.headersSent || res.destroyed) {
+      if (!res.destroyed) res.destroy();
+      return;
+    }
     return res.status(500).json({ error: 'Не удалось загрузить вложение' });
   }
 });

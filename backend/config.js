@@ -113,6 +113,18 @@ module.exports = {
     secret:        process.env.MESSAGING_GATEWAY_SECRET        || '',
     webhookSecret: process.env.GATEWAY_WEBHOOK_SECRET          || '',
   },
+  // Optional private, loopback-only source for gateway media when the gateway
+  // runs outside this release filesystem. Keep empty for the local-file path.
+  // The exact origin is deliberately fixed: this endpoint must never become an
+  // authenticated SSRF proxy controlled through deployment configuration.
+  GATEWAY_FILES_ORIGIN: (() => {
+    const value = (process.env.GATEWAY_FILES_ORIGIN || '').trim().replace(/\/+$/, '');
+    if (!value) return '';
+    if (value !== 'http://127.0.0.1:3103') {
+      throw new Error('GATEWAY_FILES_ORIGIN must be exactly http://127.0.0.1:3103');
+    }
+    return value;
+  })(),
 
   // ── ИИ-агент-администратор (диалог + запись). Движок — Claude tool-calling. ──
   // Ключ Anthropic. Claude не гео-блокируется на dev (Финляндия) — прямой вызов.

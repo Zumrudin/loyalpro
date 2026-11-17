@@ -13,6 +13,7 @@ const router = require('./routes/chat');
 const { gatewayAttachmentPath, privateAttachmentUrl } = router._internals;
 const route = router.stack.find(layer => layer.route?.path === '/attachments/:messageId').route;
 const handler = route.stack.at(-1).handle;
+const attachmentSource = require('./services/gateway-attachment-source');
 
 function response() {
   const res = { status: jest.fn(), json: jest.fn(), end: jest.fn(), set: jest.fn(), sendFile: jest.fn() };
@@ -24,6 +25,7 @@ function response() {
 let realpathSpy;
 beforeEach(() => {
   jest.clearAllMocks();
+  config.GATEWAY_FILES_ORIGIN = '';
   realpathSpy = jest.spyOn(fs.promises, 'realpath').mockImplementation(async value => path.resolve(value));
 });
 afterEach(() => realpathSpy.mockRestore());
@@ -90,6 +92,74 @@ test('untrusted executable MIME is forced to an opaque download', async () => {
   }));
 });
 
+test('configured loopback source streams only the already-authorized account path', async () => {
+  config.GATEWAY_FILES_ORIGIN = 'http://127.0.0.1:3103';
+  mockDb.oneOrNone.mockResolvedValue({
+    file_url: '/uploads/gateway/202/1700000000_abcdef.jpg', mime_type: 'image/jpeg', account_id: 202,
+  });
+  const source = require('stream').Readable.from(['JPEG']);
+  const close = jest.fn();
+  const open = jest.spyOn(attachmentSource, 'openRemoteAttachment')
+    .mockResolvedValue({ status: 'ok', stream: source, close });
+  const res = new (require('stream').PassThrough)();
+  res.status = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
+  res.end = jest.fn(require('stream').PassThrough.prototype.end.bind(res));
+  res.set = jest.fn().mockReturnValue(res);
+  let body = '';
+  res.on('data', chunk => { body += chunk.toString(); });
+
+  await handler({ params: { messageId: '94' }, user: { salonId: 7 } }, res);
+
+  expect(open).toHaveBeenCalledWith('http://127.0.0.1:3103', '/uploads/gateway/202/1700000000_abcdef.jpg', 202);
+  expect(body).toBe('JPEG');
+  expect(close).toHaveBeenCalledTimes(1);
+  open.mockRestore();
+});
+
+test('a remote stream failing before its first byte is closed without a second response', async () => {
+  config.GATEWAY_FILES_ORIGIN = 'http://127.0.0.1:3103';
+  mockDb.oneOrNone.mockResolvedValue({
+    file_url: '/uploads/gateway/202/1700000000_abcdef.jpg', mime_type: 'image/jpeg', account_id: 202,
+  });
+  const source = new (require('stream').Readable)({
+    read() { this.destroy(new Error('private upstream detail')); },
+  });
+  const close = jest.fn();
+  const open = jest.spyOn(attachmentSource, 'openRemoteAttachment')
+    .mockResolvedValue({ status: 'ok', stream: source, close });
+  const res = new (require('stream').PassThrough)();
+  res.status = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
+  res.end = jest.fn(require('stream').PassThrough.prototype.end.bind(res));
+  res.set = jest.fn().mockReturnValue(res);
+  const destroy = jest.spyOn(res, 'destroy');
+
+  await handler({ params: { messageId: '95' }, user: { salonId: 7 } }, res);
+
+  expect(destroy).toHaveBeenCalled();
+  expect(res.json).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledTimes(1);
+  open.mockRestore();
+});
+
+test('a private relay failure returns a generic 503 before attachment headers', async () => {
+  config.GATEWAY_FILES_ORIGIN = 'http://127.0.0.1:3103';
+  mockDb.oneOrNone.mockResolvedValue({
+    file_url: '/uploads/gateway/202/a.jpg', mime_type: 'image/jpeg', account_id: 202,
+  });
+  const open = jest.spyOn(attachmentSource, 'openRemoteAttachment')
+    .mockResolvedValue({ status: 'unavailable' });
+  const res = response();
+
+  await handler({ params: { messageId: '96' }, user: { salonId: 7 } }, res);
+
+  expect(res.status).toHaveBeenCalledWith(503);
+  expect(res.json).toHaveBeenCalledWith({ error: 'Вложение временно недоступно' });
+  expect(res.set).not.toHaveBeenCalled();
+  open.mockRestore();
+});
+
 test.each([
   ['wrong tenant', null],
   ['removed account', null],
@@ -99,6 +169,19 @@ test.each([
   await handler({ params: { messageId: '91' }, user: { salonId: 8 } }, res);
   expect(res.status).toHaveBeenCalledWith(404);
   expect(res.sendFile).not.toHaveBeenCalled();
+});
+
+test('remote source is never contacted when the tenant-scoped message lookup misses', async () => {
+  config.GATEWAY_FILES_ORIGIN = 'http://127.0.0.1:3103';
+  mockDb.oneOrNone.mockResolvedValue(null);
+  const open = jest.spyOn(attachmentSource, 'openRemoteAttachment');
+  const res = response();
+
+  await handler({ params: { messageId: '91' }, user: { salonId: 8 } }, res);
+
+  expect(res.status).toHaveBeenCalledWith(404);
+  expect(open).not.toHaveBeenCalled();
+  open.mockRestore();
 });
 
 test('path traversal and account-directory mismatch are rejected', async () => {
