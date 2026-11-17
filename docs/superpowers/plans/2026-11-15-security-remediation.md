@@ -4,7 +4,9 @@
 >
 > **Исторический production-статус на 16.11.2026 19:05 UTC:** готовый пакет выложен на production в `/srv/loyalpro/releases/security-followup-20261116`: Chatpush redaction, loopback bind, nginx no-query для HTTP/HTTPS, четыре FK validated. База приложения — production `0f8affa`, только девять согласованных файлов; sidebar/calendar не включены. 8 focused suites / 111 tests PASS; HTTPS/static/auth/network/log smoke PASS. Общий security-план не завершён: следующие задачи перечислены в разделе «После production-выноса» ниже. Старые записи ниже описывают состояние до этого выпуска.
 
-> **Текущий статус 16.11.2026 19:35 UTC:** оставшийся код и dev-инфраструктура приняты и выложены на dev `security-completion-20261116`. Новый пакет на production не переносился. Живой OTP требует выделенного bot token/config; natural YClients/gateway и полный SEC-14 остаются явно открыты. См. «Dev completion» ниже.
+> **Исторический dev-статус 16.11.2026 19:35 UTC:** оставшийся код и dev-инфраструктура приняты и выложены на dev `security-completion-20261116`. Новый пакет на production не переносился. Живой OTP требует выделенного bot token/config; natural YClients/gateway и полный SEC-14 остаются явно открыты. См. «Dev completion» ниже.
+
+> **Текущий статус 17.11.2026 04:50 UTC:** по явному разрешению владельца проверенный `3c8798b` выложен на production `security-completion-20261117`. Тесты и browser/HTTPS smoke PASS, Chatpush2/2 natural processed. Mobile OTP по-прежнему требует отдельной конфигурации; YClients/gateway natural delivery и полный SEC-14 не объявлены закрытыми. Подробности ниже.
 
 ## 1. Цель и обязательные ограничения
 
@@ -64,6 +66,22 @@
 - Координатор не объявляет задачу выполненной, если её тесты не запускались или остались красными.
 
 ## 3. Задачи
+
+## Production completion — 17.11.2026
+
+Разрешение: после dev-приёмки, commit/push в main владелец явно поручил выложить на production. Выпущен **полный проверенный commit `3c8798b`**, включая текущий frontend dev с sidebar/calendar; это расширяет прежний ограниченный production package `0f8affa` + security follow-up. Прежнее ограничение на непроверенные sidebar/calendar не является описанием этого выпуска: их suites и фактические static assets проверены.
+
+- Active `/srv/loyalpro/current` → `/srv/loyalpro/releases/security-completion-20261117`, switch **04:50:39 UTC**. PM2 `loyalpro` под пользователем `loyalpro`; restart --update-env и save выполнены от этого пользователя. Node22.22.1 сохранён; `/proc/<pid>/cwd` подтверждает новый release, `ss` — только127.0.0.1:3001.
+- Snapshot из main: **1154 файла** с SHA256 manifest, без node_modules/.env/data/logs. Проверен каждый hash. Чистый npm ci, candidate tests **до установки production env**, затем npm prune --omit=dev. Production .env скопирован в приватный snapshot0600; секреты не выводились и не переносились с dev. Data/logs/frontend uploads используют прежние shared targets.
+- Backup `/srv/loyalpro-backups/pre-security-completion-20261117`: custom `loyalpro.dump` **13 372 972 bytes**, `pg_restore --list` — **1300 entries**, nginx/ecosystem/env/PM2 dump, deployment metadata/log offsets. Полный restore не запускался. Каталог private0700, dump0600.
+- Единственное новое DDL относительно production — `REGISTRATION_INVITES_DDL`: additive CREATE TABLE IF NOT EXISTS, применено в транзакции к подтверждённой `loyalpro` за **18 ms**, lock/statement timeout5/30s. Нет backfill/drop/изменения patient rows. Старое приложение совместимо с сохранением новой таблицы.
+- Явные env: BIND_HOST127.0.0.1, REGISTRATION_MODE=invite, LLM_PAID_ENABLED=true, LLM_PAID_DAILY_CALLS1000 (существующие quota overrides сохраняются). Остальные budgets — проверенные defaults/config. Mobile config сохранён: salon/hash отсутствуют и mobile login fail-closed; существующий Telegram token не активирует отдельного OTP poller. Боты не переносились/не запускались.
+- Nginx: перед прежним stream regex добавлен case-insensitive matcher SSE/YClients/Chatpush/gateway (включая trailing slash); raw error log этих locations выключен, no-query access log сохраняется; upstream/real-IP headers наследуются. `nginx -t` и reload PASS. Конфигурация аналогична dev fixture с шестью synthetic502 cases; production upstream намеренно не отключался для теста.
+- Exact candidate tests без production credentials: **31 Jest suites/249 tests PASS** (30 security/provider suites предыдущей dev-приёмки + sidebar-calendar), frontend `node --test ...pages/*.test.js ...core/*.test.js` — **207/207 PASS**. Синтетические DB E2E уже пройдены на dev14/14; INSERT-based DB E2E на production не запускался. Полный Jest baseline не пересдавался.
+- HTTPS zumrudin.ru: index +7 JS (включая sidebar/calendar) побайтно совпали с committed source; script-src без unsafe-inline; unauth clients/SSE/mobile profile401. Browser через Playwright MCP с полностью synthetic API: settings whitelist, invitation tab, login Enter/button, dynamic clicks/propagation, argument escaping/XSS, CSP block, SSE ticket, Bearer CSV, homecare print/close, cert external script — **PASS, page errors0**. Проверка не создаёт real staff sessions и не отправляет реальные сообщения/OTP/bookings/AI calls.
+- Startup aggregate: active YClients1/missing0, Chatpush/gateway secrets configured. После restart read-only PostgreSQL MCP: **Chatpush2/2 processed,0 errors**; YClients0, gateway не поступал. Ошибок приложения/fatal/MaxListeners нет; один **DEP0040 punycode** от зависимости, nonfatal, dependency-upgrade не смешивался с выкатом.
+- Rollback: вернуть current на `security-followup-20261116`, выполнить restart/save от loyalpro; проверить actual cwd/HTTPS. Новую таблицу и secure nginx оставить, если причина отката только приложение. При nginx-regression восстановить backup nginx.conf и выполнить nginx -t/reload. Старый release сохранён. Switch script автоматически возвращает старое приложение при отказе локальных HTTP/CSP health checks.
+- Open gates: отдельный OTP bot/config и согласованный live mobile flow; natural YClients/gateway; полный двухсалонный HTTP/browser SEC-14; исторические full-suite failures. Они не блокировали принятый production package и не объявляются пройденными.
 
 ## Dev completion — 16.11.2026 19:35 UTC
 
