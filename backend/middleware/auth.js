@@ -11,10 +11,26 @@ function requestToken(req) {
   return typeof token === 'string' ? token : '';
 }
 
+const PASSWORD_CHANGE_ALLOWED = new Set([
+  'GET /api/auth/me',
+  'POST /api/auth/change-password',
+  'POST /api/auth/logout',
+]);
+
+function enforcePasswordChange(req, res, next) {
+  if (!req.user?.mustChangePassword) return next();
+  const pathname = (req.originalUrl || `/api${req.path || ''}`).split('?')[0];
+  if (PASSWORD_CHANGE_ALLOWED.has(`${req.method || 'GET'} ${pathname}`)) return next();
+  return res.status(403).json({
+    error: 'Требуется сменить временный пароль',
+    code: 'PASSWORD_CHANGE_REQUIRED',
+  });
+}
+
 async function authenticateStaff(req, res, next) {
   const token = requestToken(req);
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
-  if (req.token === token && req.user) return next();
+  if (req.token === token && req.user) return enforcePasswordChange(req, res, next);
 
   let claims;
   try { claims = jwt.verify(token, config.JWT_SECRET); }
@@ -26,7 +42,8 @@ async function authenticateStaff(req, res, next) {
   let staff;
   try {
     staff = await db.oneOrNone(
-      `SELECT u.id AS "userId",u.salon_id AS "salonId",u.role
+      `SELECT u.id AS "userId",u.salon_id AS "salonId",u.role,
+              u.must_change_password AS "mustChangePassword"
        FROM sessions s
        JOIN users u ON u.id=s.user_id AND u.is_active=TRUE
        JOIN salons sl ON sl.id=u.salon_id AND sl.is_active=TRUE
@@ -41,8 +58,14 @@ async function authenticateStaff(req, res, next) {
   }
 
   req.token = token;
-  req.user = { ...claims, userId: staff.userId, salonId: staff.salonId, role: staff.role };
-  return next();
+  req.user = {
+    ...claims,
+    userId: staff.userId,
+    salonId: staff.salonId,
+    role: staff.role,
+    mustChangePassword: Boolean(staff.mustChangePassword),
+  };
+  return enforcePasswordChange(req, res, next);
 }
 
 function auth(req, res, next) {

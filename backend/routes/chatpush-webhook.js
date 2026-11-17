@@ -316,7 +316,9 @@ router.post('/webhook', async (req, res) => {
             id: ins.rows[0].id,
             direction: msg.direction, channel: msg.channel,
             msg_type: msg.type, text: msg.text,
-            file_url: msg.fileUrl, mime_type: msg.mimeType,
+            file_url: /^\/uploads\/gateway\//.test(String(msg.fileUrl || ''))
+              ? `/api/chat/attachments/${ins.rows[0].id}` : msg.fileUrl,
+            mime_type: msg.mimeType,
             sender_name: msg.senderName, msg_ts: msg.timestamp,
           },
         });

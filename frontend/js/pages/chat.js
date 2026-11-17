@@ -24,6 +24,33 @@ function _chatSafeUrl(u) {
   return '';
 }
 
+async function _chatOpenPrivateAttachment(url, viewer) {
+  const headers = {};
+  const token = localStorage.getItem('lp_tk');
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const response = await fetch(url, { headers, cache: 'no-store' });
+  if (!response.ok) throw new Error('Не удалось открыть вложение');
+  const objectUrl = URL.createObjectURL(await response.blob());
+  if (viewer) viewer.location.replace(objectUrl);
+  else {
+    const link = document.createElement('a');
+    link.href = objectUrl; link.target = '_blank'; link.rel = 'noopener'; link.click();
+  }
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+}
+
+function _chatAttachmentClick(event) {
+  const link = event.target.closest && event.target.closest('[data-private-attachment]');
+  if (!link) return;
+  event.preventDefault();
+  const viewer = window.open('', '_blank');
+  if (viewer) viewer.opener = null;
+  _chatOpenPrivateAttachment(link.getAttribute('href'), viewer).catch(e => {
+    if (viewer) viewer.close();
+    console.error('chat attachment:', e);
+  });
+}
+
 const CHAT_CHANNELS = {
   whatsapp:     { label: 'WhatsApp', cls: 'chan-wa' },
   tdlib:        { label: 'Telegram', cls: 'chan-tg' },
@@ -377,7 +404,8 @@ function _chatMsgHtml(m, isGroup) {
   if (isText) {
     body = _chatEsc(m.text || '');
   } else if (safeUrl) {
-    body = `<a href="${_chatEsc(safeUrl)}" target="_blank" rel="noopener">📎 Вложение</a>` +
+    const privateAttr = safeUrl.startsWith('/api/chat/attachments/') ? ' data-private-attachment' : '';
+    body = `<a href="${_chatEsc(safeUrl)}" target="_blank" rel="noopener"${privateAttr}>📎 Вложение</a>` +
            (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
   } else {
     body = '📎 Вложение' + (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
@@ -410,6 +438,7 @@ function renderChatMessages(messages) {
     return;
   }
   const isGroup = _chatIsGroup();
+  paneEl.onclick = _chatAttachmentClick;
   const html = messages.map(m => _chatMsgHtml(m, isGroup)).join('');
   // Без изменений — не трогаем DOM (сохраняем позицию прокрутки).
   if (paneEl._lastHtml === html) return;

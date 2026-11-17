@@ -17,6 +17,8 @@ const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL } = require(
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
 const { safeErrorCode } = require('../utils/safe-error');
+const path = require('path');
+const fs = require('fs');
 
 const chatEvents = require('../services/chat-events');
 const { persistWhatsappOutgoing } = require('../services/chat-persist');
@@ -25,9 +27,45 @@ const dialogState = require('../services/agent/dialog-state');
 const followupQueue = require('../services/agent/followup-queue');
 
 const CHAT_DIALOGS_LIMIT = 500;
+const GATEWAY_UPLOAD_ROOT = path.resolve(__dirname, '../../frontend/uploads/gateway');
+const INLINE_ATTACHMENT_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf',
+  'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a',
+  'video/mp4', 'video/quicktime', 'text/plain',
+]);
 
 // admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
 const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
+
+function privateAttachmentUrl(row) {
+  return row && /^\/uploads\/gateway\//.test(String(row.file_url || ''))
+    ? `/api/chat/attachments/${row.id}` : row?.file_url;
+}
+
+function gatewayAttachmentPath(fileUrl, accountId) {
+  const prefix = `/uploads/gateway/${accountId}/`;
+  const value = String(fileUrl || '');
+  if (!value.startsWith(prefix)) return null;
+  const name = value.slice(prefix.length);
+  if (!name || name !== path.basename(name) || name === '.' || name === '..') return null;
+  const absolute = path.resolve(GATEWAY_UPLOAD_ROOT, String(accountId), name);
+  const accountRoot = path.resolve(GATEWAY_UPLOAD_ROOT, String(accountId));
+  return absolute.startsWith(accountRoot + path.sep) ? absolute : null;
+}
+
+async function resolveGatewayAttachment(fileUrl, accountId) {
+  const candidate = gatewayAttachmentPath(fileUrl, accountId);
+  if (!candidate) return null;
+  try {
+    const [realAccountRoot, realFile] = await Promise.all([
+      fs.promises.realpath(path.join(GATEWAY_UPLOAD_ROOT, String(accountId))),
+      fs.promises.realpath(candidate),
+    ]);
+    return realFile.startsWith(realAccountRoot + path.sep) ? realFile : null;
+  } catch {
+    return null;
+  }
+}
 
 async function streamAuth(req, res, next) {
   res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
@@ -180,10 +218,46 @@ router.get('/dialogs/:key/messages', adminOnly, async (req, res) => {
         AND ($3::bigint IS NULL OR msg_ts > $3)
       ORDER BY msg_ts ASC NULLS FIRST, id ASC
     `, [salonId, key, Number.isFinite(after) && after > 0 ? after : null]);
-    res.json({ messages: rows });
+    res.json({ messages: rows.map(row => ({ ...row, file_url: privateAttachmentUrl(row) })) });
   } catch (e) {
     logger.error(`messages failed: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Не удалось загрузить сообщения' });
+  }
+});
+
+// GET /api/chat/attachments/:messageId — private gateway media. Ownership is
+// derived from the authenticated session and both persisted message/account
+// rows; disabled accounts retain their salon's historical attachments.
+router.get('/attachments/:messageId', adminOnly, async (req, res) => {
+  const messageId = Number(req.params.messageId);
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) return res.status(404).end();
+  try {
+    const row = await db.oneOrNone(`
+      SELECT cm.file_url, cm.mime_type, cm.customer_id AS account_id
+      FROM chatpush_messages cm
+      JOIN messenger_accounts ma
+       ON ma.external_id = cm.customer_id::text
+       AND ma.provider = 'gateway'
+       AND ma.salon_id = cm.salon_id
+      WHERE cm.id = $1 AND cm.salon_id = $2 AND cm.provider = 'gateway'
+      LIMIT 1
+    `, [messageId, req.user.salonId]);
+    const filePath = row && await resolveGatewayAttachment(row.file_url, row.account_id);
+    if (!filePath) return res.status(404).end();
+    const mimeType = String(row.mime_type || '').toLowerCase().split(';')[0].trim();
+    const inline = INLINE_ATTACHMENT_MIMES.has(mimeType);
+    res.set({
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Type': inline ? mimeType : 'application/octet-stream',
+      'Content-Disposition': inline ? 'inline' : 'attachment',
+    });
+    return res.sendFile(filePath, err => {
+      if (err && !res.headersSent) res.status(err.code === 'ENOENT' ? 404 : 500).end();
+    });
+  } catch (e) {
+    logger.error(`attachment download failed: ${safeErrorCode(e)}`);
+    return res.status(500).json({ error: 'Не удалось загрузить вложение' });
   }
 });
 
@@ -436,4 +510,5 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
 
 module.exports = router;
 // Для юнит-тестов (chat-route-send.test.js): адресация и проверка доставки без HTTP.
-module.exports._internals = { resolveRecipient, scheduleDeliveryCheck, DELIVERY_STATUS_UNDELIVERABLE };
+module.exports._internals = { resolveRecipient, scheduleDeliveryCheck, DELIVERY_STATUS_UNDELIVERABLE,
+  privateAttachmentUrl, gatewayAttachmentPath, resolveGatewayAttachment };

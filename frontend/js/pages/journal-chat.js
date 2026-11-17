@@ -54,20 +54,43 @@ const jrChatTime = ts => {
 };
 function jrChatSafeUrl(u) {
   const s = String(u || '');
-  return /^https?:\/\//i.test(s) || /^\/uploads\//.test(s) ? s : null;
+  return /^https?:\/\//i.test(s) || /^\/uploads\//.test(s) || /^\/api\/chat\/attachments\/\d+$/.test(s) ? s : null;
+}
+async function jrChatOpenPrivateAttachment(url, viewer) {
+  const response = await fetch(url, { cache: 'no-store', headers: { Authorization: 'Bearer ' + TOKEN } });
+  if (!response.ok) throw new Error('Не удалось открыть вложение');
+  const objectUrl = URL.createObjectURL(await response.blob());
+  if (viewer) viewer.location.replace(objectUrl);
+  else {
+    const link = document.createElement('a');
+    link.href = objectUrl; link.target = '_blank'; link.rel = 'noopener'; link.click();
+  }
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+}
+function jrChatAttachmentClick(event) {
+  const link = event.target.closest && event.target.closest('[data-private-attachment]');
+  if (!link) return;
+  event.preventDefault();
+  const viewer = window.open('', '_blank');
+  if (viewer) viewer.opener = null;
+  jrChatOpenPrivateAttachment(link.getAttribute('href'), viewer).catch(e => {
+    if (viewer) viewer.close();
+    console.error('journal chat attachment:', e);
+  });
 }
 function jrChatMsgHtml(m) {
   const side = m.direction === 'outgoing' ? 'out' : 'in';
   const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
   const url = jrChatSafeUrl(m.file_url);
   const body = isText ? jrEscape(m.text || '')
-    : (url ? `<a href="${jrEscape(url)}" target="_blank" rel="noopener">📎 Вложение</a>` : '📎 Вложение') + (m.text ? `<div>${jrEscape(m.text)}</div>` : '');
+    : (url ? `<a href="${jrEscape(url)}" target="_blank" rel="noopener"${url.startsWith('/api/chat/attachments/') ? ' data-private-attachment' : ''}>📎 Вложение</a>` : '📎 Вложение') + (m.text ? `<div>${jrEscape(m.text)}</div>` : '');
   const state = m._local ? (m._state === 'failed' ? ` <span class="jr-chat-err">⚠ ${jrEscape(m._error || 'не отправлено')}</span>` : ' ⏳') : '';
   return `<div class="chat-msg chat-msg-${side}${m._local ? ' jr-chat-local' : ''}"><div class="chat-bubble">${body}</div><div class="chat-msg-time">${m.channel ? `<span class="jr-chat-chan">${jrEscape(JR_CH_LABELS[m.channel] || m.channel)}</span>` : ''}${jrEscape(jrChatTime(m.msg_ts))}${state}</div></div>`;
 }
 function jrChatRenderMessages() {
   const box = jrEl('jrChatMessages'), c = journal.chat;
   if (!box || !c) return;
+  box.onclick = jrChatAttachmentClick;
   const atBottom = !box.innerHTML || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
   box.innerHTML = c.messages.length ? c.messages.map(jrChatMsgHtml).join('')
     : '<p class="jr-hint jr-chat-empty">Переписки с клиентом пока нет. Можно написать первым — в WhatsApp или MAX по номеру.</p>';

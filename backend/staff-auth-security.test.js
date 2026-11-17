@@ -107,8 +107,10 @@ beforeAll(async () => {
     req.headers.authorization = `Bearer ${token}`;
     next();
   });
+  app.use('/api', apiAuthGuard);
   app.use('/api/users', usersRouter);
   app.use('/api/auth', authRouter);
+  app.get('/api/protected-test', (_req, res) => res.json({ ok: true }));
   await new Promise(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -171,6 +173,24 @@ test('own password change preserves only current server-derived session', async 
   expect(mockTxQuery).toHaveBeenCalledWith(
     'DELETE FROM sessions WHERE user_id=$1 AND token<>$2', [5, token]
   );
+});
+
+test('restricted session changes password through double auth and becomes unrestricted', async () => {
+  token = tokenFor();
+  mockOneOrNone.mockResolvedValue({ ...staffRow(), mustChangePassword: true });
+  expect((await request('/api/protected-test', 'GET')).status).toBe(403);
+
+  mockOne.mockResolvedValue({ id: 5, password_hash: 'synthetic-old-hash' });
+  mockTxQuery.mockImplementation(async sql => sql.includes('UPDATE users')
+    ? { rows: [{ id: 5 }] }
+    : { rows: [] });
+  const changed = await request('/api/auth/change-password', 'POST', {
+    current_password: 'synthetic-current', new_password: 'synthetic-new-password',
+  });
+  expect(changed.status).toBe(200);
+
+  mockOneOrNone.mockResolvedValue({ ...staffRow(), mustChangePassword: false });
+  expect((await request('/api/protected-test', 'GET')).status).toBe(200);
 });
 
 test('logout deletes exactly the current authenticated session', async () => {

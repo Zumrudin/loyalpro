@@ -111,13 +111,14 @@ app.use(express.json({ limit: '2mb' }));
 // битая копия в кэше телефона жила бы вечно. С ETag браузер шлёт If-None-Match
 // и получает пустой 304. HTML по-прежнему no-store: index.html обязан быть
 // свежим, иначе он сошлётся на несуществующие версии ассетов.
-// Медиа из Telegram-шлюза (frontend/uploads/gateway) кладёт СОБЕСЕДНИК: имя и
-// содержимое ему подконтрольны. Расширение шлюз берёт из белого списка по MIME,
-// а здесь — второй рубеж: nosniff и attachment для всего, кроме картинок, чтобы
-// ни один файл не исполнился в origin админки.
-app.use('/uploads/gateway', (req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (!/\.(jpe?g|png|webp|gif)$/i.test(req.path)) res.setHeader('Content-Disposition', 'attachment');
+// Gateway media is private chat data. Keep this deny before express.static:
+// authenticated delivery is handled by /api/chat/attachments/:messageId.
+// nginx must apply the same rule and must not serve this directory directly.
+app.use((req, res, next) => {
+  let decoded;
+  try { decoded = path.posix.normalize(decodeURIComponent(req.path)); }
+  catch { return res.status(400).end(); }
+  if (/^\/uploads\/gateway(?:\/|$)/i.test(decoded)) return res.status(404).end();
   next();
 });
 app.use(express.static(path.join(__dirname, '../frontend'), { etag: true, lastModified: true, setHeaders: (res, filePath) => { if (filePath.endsWith('.html')) { res.setHeader('Cache-Control', 'no-store'); } } }));

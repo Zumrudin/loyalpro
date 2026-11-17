@@ -4,7 +4,7 @@ const fs        = require('fs');
 const multer    = require('multer');
 const puppeteer = require('puppeteer');
 const axios     = require('axios');
-const { db }    = require('../db');
+const { db, withTransaction } = require('../db');
 const { auth }  = require('../middleware/auth');
 const { ycGet } = require('../services/yclients');
 const { getTreeCache, setTreeCache } = require('../services/yclients');
@@ -19,11 +19,14 @@ const authorship = require('../services/outgoing-authorship');
 const { persistWhatsappOutgoing } = require('../services/chat-persist');
 const hcSend = require('../services/home-care-send');
 
-async function sendPrescriptionPush(clientId, prescriptionId) {
+async function sendPrescriptionPush(salonId, clientId, prescriptionId) {
   try {
     const row = await db.oneOrNone(
-      'SELECT token FROM mobile_fcm_tokens WHERE client_id=$1',
-      [clientId]
+      `SELECT mt.token
+         FROM mobile_fcm_tokens mt
+         JOIN clients c ON c.id = mt.client_id AND c.salon_id = $1
+        WHERE mt.client_id = $2`,
+      [salonId, clientId]
     );
     if (!row?.token) return;
     await axios.post('https://exp.host/--/api/v2/push/send', {
@@ -293,14 +296,14 @@ router.get('/', auth, async (req, res) => {
                        END
               ) AS adherence_pct
        FROM home_care_prescriptions p
-       LEFT JOIN clients c ON c.id=p.client_id
-       LEFT JOIN users u ON u.id=p.specialist_id
+       LEFT JOIN clients c ON c.id=p.client_id AND c.salon_id=p.salon_id
+       LEFT JOIN users u ON u.id=p.specialist_id AND u.salon_id=p.salon_id
        WHERE p.salon_id=$1 AND ($2='' OR c.name ILIKE '%'||$2||'%' OR c.phone ILIKE '%'||$2||'%')
        ORDER BY p.created_at DESC LIMIT $3 OFFSET $4`,
       [req.user.salonId, search, parseInt(limit), offset]
     );
     const total = await db.one(
-      `SELECT COUNT(*) FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
+      `SELECT COUNT(*) FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id AND c.salon_id=p.salon_id
        WHERE p.salon_id=$1 AND ($2='' OR c.name ILIKE '%'||$2||'%' OR c.phone ILIKE '%'||$2||'%')`,
       [req.user.salonId, search]
     );
@@ -312,8 +315,8 @@ router.get('/:id/preview', auth, async (req, res) => {
   try {
     const p = await db.oneOrNone(
       `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
-       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
-       LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
+       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id AND c.salon_id=p.salon_id
+       LEFT JOIN users u ON u.id=p.specialist_id AND u.salon_id=p.salon_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
     );
     if (!p) return res.status(404).json({ error: 'Not found' });
@@ -329,8 +332,8 @@ router.get('/:id/preview', auth, async (req, res) => {
 async function renderPrescriptionPdf(salonId, id, { title } = {}) {
   const p = await db.oneOrNone(
     `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
-     FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
-     LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
+     FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id AND c.salon_id=p.salon_id
+     LEFT JOIN users u ON u.id=p.specialist_id AND u.salon_id=p.salon_id LEFT JOIN salons s ON s.id=p.salon_id
      WHERE p.id=$1 AND p.salon_id=$2`, [id, salonId]
   );
   if (!p) return null;
@@ -383,7 +386,7 @@ async function loadLastIncoming(salonId, phone) {
 async function loadSendOptions(salonId, id) {
   const p = await db.oneOrNone(
     `SELECT p.id, c.name AS client_name, c.phone AS client_phone
-       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id = p.client_id
+       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id = p.client_id AND c.salon_id = p.salon_id
       WHERE p.id = $1 AND p.salon_id = $2`, [id, salonId]);
   if (!p) return null;
   const opts = hcSend.channelOptions(p.client_phone, await loadLastIncoming(salonId, p.client_phone));
@@ -448,8 +451,8 @@ router.get('/:id', auth, async (req, res) => {
   try {
     const p = await db.oneOrNone(
       `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
-       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
-       LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
+       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id AND c.salon_id=p.salon_id
+       LEFT JOIN users u ON u.id=p.specialist_id AND u.salon_id=p.salon_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
     );
     if (!p) return res.status(404).json({ error: 'Not found' });
@@ -461,6 +464,17 @@ router.get('/:id', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id, start_date, end_date } = req.body;
+    const parseOptionalId = (value) => {
+      if (value == null || value === '') return null;
+      if ((typeof value !== 'number' && typeof value !== 'string') || !/^\d+$/.test(String(value))) return undefined;
+      const id = Number(value);
+      return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+    };
+    const clientId = parseOptionalId(client_id);
+    const recordId = parseOptionalId(record_id);
+    if (clientId === undefined || recordId === undefined || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'Invalid client_id, record_id or items' });
+    }
     const startDateValue = start_date || new Date().toISOString().slice(0, 10);
     const endDateValue   = end_date || null;
     function normalizeDays(raw) {
@@ -473,28 +487,44 @@ router.post('/', auth, async (req, res) => {
       if (cleaned.length === 0 || cleaned.length === 7) return null;
       return cleaned;
     }
-    const p = await db.one(
-      `INSERT INTO home_care_prescriptions
+    const p = await withTransaction(async client => {
+      if (clientId) {
+        const check = await client.query('SELECT id FROM clients WHERE id=$1 AND salon_id=$2', [clientId, req.user.salonId]);
+        if (!check.rows[0]) return null;
+      }
+      if (recordId) {
+        const check = await client.query(
+          'SELECT id FROM records WHERE id=$1 AND salon_id=$2 AND ($3::int IS NULL OR client_id IS NULL OR client_id=$3)',
+          [recordId, req.user.salonId, clientId]
+        );
+        if (!check.rows[0]) return null;
+      }
+      const createdResult = await client.query(
+        `INSERT INTO home_care_prescriptions
          (salon_id, client_id, specialist_id, face_procedures, body_procedures,
           hair_procedures, vitamins, notes, record_id, start_date, end_date)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-      [
-        req.user.salonId, client_id || null, req.user.userId,
+        [
+        req.user.salonId, clientId, req.user.userId,
         face_procedures || null, body_procedures || null,
         hair_procedures || null, vitamins || null, notes || null,
-        record_id || null, startDateValue, endDateValue,
-      ]
-    );
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      await db.query(
+        recordId, startDateValue, endDateValue,
+        ]
+      );
+      const created = createdResult.rows[0];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        await client.query(
         `INSERT INTO home_care_items
            (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week, price)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [p.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week), hcSend.itemPrice(it)]
-      );
-    }
-    if (client_id) sendPrescriptionPush(client_id, p.id);
+          [created.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week), hcSend.itemPrice(it)]
+        );
+      }
+      return created;
+    });
+    if (!p) return res.status(404).json({ error: 'Client or record not found' });
+    if (clientId) sendPrescriptionPush(req.user.salonId, clientId, p.id);
     res.json({ id: p.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -502,6 +532,18 @@ router.post('/', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id, start_date, end_date } = req.body;
+    const parseOptionalId = (value) => {
+      if (value == null || value === '') return null;
+      if ((typeof value !== 'number' && typeof value !== 'string') || !/^\d+$/.test(String(value))) return undefined;
+      const id = Number(value);
+      return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+    };
+    const clientId = parseOptionalId(client_id);
+    const recordId = parseOptionalId(record_id);
+    const prescriptionId = parseOptionalId(req.params.id);
+    if (prescriptionId == null || clientId === undefined || recordId === undefined || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'Invalid client_id, record_id or items' });
+    }
     const startDateValue = start_date || new Date().toISOString().slice(0, 10);
     const endDateValue   = end_date || null;
     function normalizeDays(raw) {
@@ -514,30 +556,45 @@ router.put('/:id', auth, async (req, res) => {
       if (cleaned.length === 0 || cleaned.length === 7) return null;
       return cleaned;
     }
-    const existing = await db.oneOrNone('SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
-    if (!existing) return res.status(404).json({ error: 'Not found' });
-    await db.query(
+    const updated = await withTransaction(async client => {
+      const existing = await client.query('SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2 FOR UPDATE', [prescriptionId, req.user.salonId]);
+      if (!existing.rows[0]) return false;
+      if (clientId) {
+        const check = await client.query('SELECT id FROM clients WHERE id=$1 AND salon_id=$2', [clientId, req.user.salonId]);
+        if (!check.rows[0]) return false;
+      }
+      if (recordId) {
+        const check = await client.query(
+          'SELECT id FROM records WHERE id=$1 AND salon_id=$2 AND ($3::int IS NULL OR client_id IS NULL OR client_id=$3)',
+          [recordId, req.user.salonId, clientId]
+        );
+        if (!check.rows[0]) return false;
+      }
+      await client.query(
       `UPDATE home_care_prescriptions
           SET client_id=$1, face_procedures=$2, body_procedures=$3,
               hair_procedures=$4, vitamins=$5, notes=$6, record_id=$7,
               start_date=$8, end_date=$9, updated_at=NOW()
-        WHERE id=$10`,
+        WHERE id=$10 AND salon_id=$11`,
       [
-        client_id || null, face_procedures || null, body_procedures || null,
+        clientId, face_procedures || null, body_procedures || null,
         hair_procedures || null, vitamins || null, notes || null,
-        record_id || null, startDateValue, endDateValue, req.params.id,
+        recordId, startDateValue, endDateValue, prescriptionId, req.user.salonId,
       ]
-    );
-    await db.query('DELETE FROM home_care_items WHERE prescription_id=$1', [req.params.id]);
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      await db.query(
+      );
+      await client.query('DELETE FROM home_care_items WHERE prescription_id=$1', [prescriptionId]);
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        await client.query(
         `INSERT INTO home_care_items
            (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week, price)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [req.params.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week), hcSend.itemPrice(it)]
-      );
-    }
+        [prescriptionId, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week), hcSend.itemPrice(it)]
+        );
+      }
+      return true;
+    });
+    if (!updated) return res.status(404).json({ error: 'Prescription, client or record not found' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -628,6 +628,7 @@ async function runMigrations(client) {
   // New rows are checked immediately. NOT VALID leaves legacy rows untouched;
   // nullable record/course/specialist links retain their original SET NULL FKs.
   await client.query(CASE_TENANT_INTEGRITY_DDL);
+  await client.query(HOME_CARE_TENANT_INTEGRITY_DDL);
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS s3_orphans (
@@ -3409,4 +3410,32 @@ CREATE TRIGGER case_comment_tenant_check
   FOR EACH ROW EXECUTE FUNCTION validate_case_comment_tenant();
 `;
 
-module.exports = { REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };
+// Retain the existing single-column SET NULL FKs. Composite NO ACTION checks
+// run after those referential actions, preserving optional links on deletion.
+// NOT VALID avoids rewriting legacy associations; new writes are enforced.
+// Index builds can block writers: apply with bounded timeouts in the runbook.
+const HOME_CARE_TENANT_INTEGRITY_DDL = `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_salon_id_id ON clients (salon_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_records_salon_id_id ON records (salon_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_salon_id_id ON users (salon_id, id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='home_care_prescriptions'::regclass AND conname='fk_hcp_salon_client') THEN
+    ALTER TABLE home_care_prescriptions ADD CONSTRAINT fk_hcp_salon_client
+      FOREIGN KEY (salon_id, client_id) REFERENCES clients (salon_id, id)
+      DEFERRABLE INITIALLY IMMEDIATE NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='home_care_prescriptions'::regclass AND conname='fk_hcp_salon_record') THEN
+    ALTER TABLE home_care_prescriptions ADD CONSTRAINT fk_hcp_salon_record
+      FOREIGN KEY (salon_id, record_id) REFERENCES records (salon_id, id)
+      DEFERRABLE INITIALLY IMMEDIATE NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='home_care_prescriptions'::regclass AND conname='fk_hcp_salon_specialist') THEN
+    ALTER TABLE home_care_prescriptions ADD CONSTRAINT fk_hcp_salon_specialist
+      FOREIGN KEY (salon_id, specialist_id) REFERENCES users (salon_id, id)
+      DEFERRABLE INITIALLY IMMEDIATE NOT VALID;
+  END IF;
+END $$;
+`;
+
+module.exports = { HOME_CARE_TENANT_INTEGRITY_DDL, REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };

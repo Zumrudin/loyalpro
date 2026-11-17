@@ -1797,6 +1797,9 @@ describe('record card: «Чат» tab (13.11.2026)', () => {
   const html = h.context.jrChatMsgHtml({ direction: 'incoming', channel: 'max', text: '<script>x</script>', msg_ts: 1763020800 });
   expect(html).toContain('&lt;script&gt;'); expect(html).not.toContain('<script>');
   expect(h.context.jrChatMsgHtml({ direction: 'incoming', msg_type: 'image', file_url: 'javascript:alert(1)' })).not.toContain('javascript:');
+  const attachment = h.context.jrChatMsgHtml({ direction: 'incoming', msg_type: 'image', file_url: '/api/chat/attachments/91' });
+  expect(attachment).toContain('href="/api/chat/attachments/91"');
+  expect(attachment).toContain('data-private-attachment');
  });
  test('opening loads the dialog by phone; send posts text+channel, optimistic bubble is replaced by the echo', async () => {
   const h = cardHarness();

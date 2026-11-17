@@ -1,68 +1,80 @@
 #!/usr/bin/env node
-// ============================================================
-// Password Reset Script for LoyalPro
-// Usage: node reset-password.js <email> <new_password>
-// ============================================================
+// Operator-only recovery CLI. Put the email and password in separate private
+// files (mode 0600), then run:
+//   node reset-password.js EMAIL_FILE PASSWORD_FILE --confirm-database=loyalpro_test
+// The password is never accepted in argv or printed. Use /dev/stdin as
+// PASSWORD_FILE for interactive input without terminal echo, for example:
+//   read -rs PASSWORD; printf '%s\n' "$PASSWORD" | node reset-password.js EMAIL_FILE /dev/stdin --confirm-database=loyalpro_test
 
-require('dotenv').config();
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
-const { pool } = require('./db');
 
-async function resetPassword(email, newPassword) {
-  if (!email || !newPassword) {
-    console.error('❌ Usage: node reset-password.js <email> <new_password>');
-    console.error('Example: node reset-password.js zizy05zizy@mail.ru MyNewPassword123');
-    process.exit(1);
+function readPrivateFile(filename, label) {
+  const stat = fs.statSync(filename);
+  if (!stat.isFile() && filename !== '/dev/stdin') throw new Error(`${label} input is not a regular file`);
+  if (filename !== '/dev/stdin' && (stat.mode & 0o077) !== 0) {
+    throw new Error(`${label} file must not be accessible by group or other users`);
+  }
+  return fs.readFileSync(filename, 'utf8').replace(/[\r\n]+$/, '');
+}
+
+async function resetPassword(client, email, newPassword) {
+  const normalizedEmail = String(email || '').toLowerCase().trim();
+  if (!normalizedEmail) throw new Error('email is required');
+  if (typeof newPassword !== 'string' || newPassword.length < 8) {
+    throw new Error('password must be at least 8 characters');
   }
 
-  if (newPassword.length < 6) {
-    console.error('❌ Пароль должен быть минимум 6 символов');
-    process.exit(1);
-  }
-
-  const client = await pool.connect();
+  await client.query('BEGIN');
   try {
-    // Check if user exists
     const user = await client.query(
-      'SELECT id, name, email FROM users WHERE email = $1',
-      [email.toLowerCase().trim()]
+      'SELECT id FROM users WHERE email=$1 FOR UPDATE',
+      [normalizedEmail]
     );
+    if (user.rows.length !== 1) throw new Error('user not found or email is not unique');
 
-    if (user.rows.length === 0) {
-      console.error(`❌ Пользователь с email "${email}" не найден`);
-      process.exit(1);
-    }
-
-    const userId = user.rows[0].id;
-    const userName = user.rows[0].name;
-
-    // Hash new password
     const hash = await bcrypt.hash(newPassword, 12);
-
-    // Update password
-    const result = await client.query(
-      'UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE id = $2 RETURNING id, email, name',
+    const userId = user.rows[0].id;
+    await client.query(
+      'UPDATE users SET password_hash=$1, must_change_password=FALSE WHERE id=$2',
       [hash, userId]
     );
-
-    console.log('✅ Пароль успешно сброшен!');
-    console.log('');
-    console.log('Данные для входа:');
-    console.log(`   Email: ${result.rows[0].email}`);
-    console.log(`   Пароль: ${newPassword}`);
-    console.log(`   Пользователь: ${result.rows[0].name}`);
-    console.log('');
-    console.log('🔐 Убедитесь, что сохранили новый пароль в безопасном месте!');
-
+    await client.query('DELETE FROM sessions WHERE user_id=$1', [userId]);
+    await client.query('COMMIT');
   } catch (error) {
-    console.error('❌ Ошибка при сбросе пароля:', error.message);
-    process.exit(1);
-  } finally {
-    await client.release();
-    process.exit(0);
+    await client.query('ROLLBACK');
+    throw error;
   }
 }
 
-// Get arguments from command line
-const [email, password] = process.argv.slice(2);
-resetPassword(email, password);
+async function main(argv = process.argv.slice(2), dependencies = {}) {
+  const [emailFile, passwordFile, confirmation] = argv;
+  if (!emailFile || !passwordFile || !/^--confirm-database=(loyalpro_test|loyalpro)$/.test(confirmation || '')) {
+    throw new Error('usage: reset-password.js EMAIL_FILE PASSWORD_FILE --confirm-database=loyalpro_test|loyalpro');
+  }
+  const email = readPrivateFile(emailFile, 'email');
+  const password = readPrivateFile(passwordFile, 'password');
+  let pool = dependencies.pool;
+  if (!pool) {
+    require('dotenv').config({ quiet: true });
+    pool = require('./db').pool;
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    const { rows } = await client.query('SELECT current_database() AS name');
+    if (rows[0]?.name !== confirmation.split('=')[1]) throw new Error('database mismatch');
+    await resetPassword(client, email, password);
+    console.log('Password reset completed and all sessions revoked.');
+  } finally {
+    if (client) client.release();
+    await pool.end();
+  }
+}
+
+if (require.main === module) {
+  main()
+    .catch(() => { console.error('Password reset failed; no secret details logged.'); process.exitCode = 1; });
+}
+
+module.exports = { main, readPrivateFile, resetPassword };

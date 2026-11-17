@@ -57,8 +57,14 @@ async function syncGoodsCategories(salon) {
       }
       if (category) {
         await db.query(
-          `UPDATE goods_sale_items SET yclients_category = $1 WHERE yclients_goods_id = $2 AND yclients_category IS DISTINCT FROM $1`,
-          [category, goodId]
+          `UPDATE goods_sale_items gsi
+              SET yclients_category = $1
+             FROM goods_sales gs
+            WHERE gsi.sale_id = gs.id
+              AND gs.salon_id = $3
+              AND gsi.yclients_goods_id = $2
+              AND gsi.yclients_category IS DISTINCT FROM $1`,
+          [category, goodId, salon.id]
         );
         updated++;
       }
