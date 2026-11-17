@@ -10,7 +10,7 @@ async function loadCatalog(salonId) {
     CASE WHEN g.yclients_company_id::text=s.yclients_company_id::text THEN g.yclients_id END AS external_category_id,
     g.title AS category_title
     FROM service_catalog c JOIN salons s ON s.id=c.salon_id
-    LEFT JOIN service_categories g ON g.salon_id=c.salon_id AND g.id=c.category_id
+    LEFT JOIN service_categories g ON g.salon_id=c.salon_id AND g.id=COALESCE(c.accounting_category_id,c.category_id)
     WHERE c.salon_id=$1 ORDER BY c.id`, [salonId]);
   const meta = { titleByService: new Map(), categoryByService: new Map(), durationByService: new Map() };
   const categories = new Map(), unlinkedServices = [];

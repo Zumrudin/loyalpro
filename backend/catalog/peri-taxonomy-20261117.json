@@ -1,0 +1,4214 @@
+{
+  "sourceKey": "peri-website-20261117",
+  "websiteSha256": "29c75222eb704b3d9e64bb2fc42a9a3f2c2f142aecea24903245b03e22ee375d",
+  "nodes": [
+    {
+      "key": "root-0",
+      "title": "Консультации",
+      "parent": null,
+      "order": 0
+    },
+    {
+      "key": "price-additional-273",
+      "title": "Консультации",
+      "parent": "root-0",
+      "order": 0
+    },
+    {
+      "key": "root-1",
+      "title": "Аппаратная косметология",
+      "parent": null,
+      "order": 1
+    },
+    {
+      "key": "price-pigment-lumec",
+      "title": "Lumecca — фотоомоложение и коррекция пигментации, сосудов",
+      "parent": "root-1",
+      "order": 0
+    },
+    {
+      "key": "price-rf-lifting-inmode",
+      "title": "Morpheus8 — микроигольчатый RF-лифтинг",
+      "parent": "root-1",
+      "order": 1
+    },
+    {
+      "key": "price-volnewmer",
+      "title": "Volnewmer — монополярный RF-лифтинг",
+      "parent": "root-1",
+      "order": 2
+    },
+    {
+      "key": "price-tesla-former",
+      "title": "Tesla Former — аппаратная коррекция фигуры",
+      "parent": "root-1",
+      "order": 3
+    },
+    {
+      "key": "price-pladuo",
+      "title": "Pladuo — плазменные процедуры для кожи",
+      "parent": "root-1",
+      "order": 4
+    },
+    {
+      "key": "price-beautylizer",
+      "title": "Beautylizer — RSL-массаж тела",
+      "parent": "root-1",
+      "order": 5
+    },
+    {
+      "key": "price-laser-epilation",
+      "title": "Лазерная эпиляция Pacer One Pro",
+      "parent": "root-1",
+      "order": 6
+    },
+    {
+      "key": "price-profeccial",
+      "title": "ProFacial — комплексный аппаратный уход",
+      "parent": "root-1",
+      "order": 7
+    },
+    {
+      "key": "price-heleo",
+      "title": "HELEO4 — фотодинамическая терапия",
+      "parent": "root-1",
+      "order": 8
+    },
+    {
+      "key": "price-mikrotokovaya-terapiya",
+      "title": "Микротоковая терапия",
+      "parent": "root-1",
+      "order": 9
+    },
+    {
+      "key": "root-2",
+      "title": "Инъекционная косметология",
+      "parent": null,
+      "order": 2
+    },
+    {
+      "key": "price-mezoterapiya-i-biorevitalizaciya",
+      "title": "Мезотерапия и биоревитализация",
+      "parent": "root-2",
+      "order": 0
+    },
+    {
+      "key": "price-konturnaya-plastika",
+      "title": "Контурная пластика",
+      "parent": "root-2",
+      "order": 1
+    },
+    {
+      "key": "price-botullinoterapiya",
+      "title": "Ботулинотерапия",
+      "parent": "root-2",
+      "order": 2
+    },
+    {
+      "key": "price-plazmoterapiya-plazmolifting",
+      "title": "Плазмотерапия (плазмолифтинг)",
+      "parent": "root-2",
+      "order": 3
+    },
+    {
+      "key": "price-droppers",
+      "title": "Капельницы (IV-терапия)",
+      "parent": "root-2",
+      "order": 4
+    },
+    {
+      "key": "price-additional-260",
+      "title": "Коллагенотерапия",
+      "parent": "root-2",
+      "order": 5
+    },
+    {
+      "key": "price-additional-285",
+      "title": "Полимолочная кислота",
+      "parent": "root-2",
+      "order": 6
+    },
+    {
+      "key": "price-additional-333",
+      "title": "Трихология",
+      "parent": "root-2",
+      "order": 7
+    },
+    {
+      "key": "root-3",
+      "title": "Эстетическая косметология",
+      "parent": null,
+      "order": 3
+    },
+    {
+      "key": "price-kosemotologicheskie-pilingi",
+      "title": "Косметологические пилинги",
+      "parent": "root-3",
+      "order": 0
+    },
+    {
+      "key": "price-uhodovye-procedury",
+      "title": "Уходовые программы",
+      "parent": "root-3",
+      "order": 1
+    },
+    {
+      "key": "price-kosmetologicheskie-chistki",
+      "title": "Дерматологические чистки",
+      "parent": "root-3",
+      "order": 2
+    },
+    {
+      "key": "root-4",
+      "title": "Дополнительные услуги",
+      "parent": null,
+      "order": 4
+    },
+    {
+      "key": "price-additional-226",
+      "title": "Дополнительные услуги",
+      "parent": "root-4",
+      "order": 0
+    },
+    {
+      "key": "other",
+      "title": "Другие услуги и служебные",
+      "parent": null,
+      "order": 99
+    },
+    {
+      "key": "other-9536366",
+      "title": "Инъекционная косметология",
+      "parent": "other",
+      "order": 1
+    },
+    {
+      "key": "other-9536371",
+      "title": "Эстетическая косметология",
+      "parent": "other",
+      "order": 2
+    },
+    {
+      "key": "other-15394116",
+      "title": "Inmode",
+      "parent": "other",
+      "order": 4
+    },
+    {
+      "key": "other-9536369",
+      "title": "Лазерная эпиляция",
+      "parent": "other",
+      "order": 6
+    },
+    {
+      "key": "other-15394165",
+      "title": "Комплексы",
+      "parent": "other",
+      "order": 7
+    },
+    {
+      "key": "other-15394166",
+      "title": "Техническая",
+      "parent": "other",
+      "order": 10
+    },
+    {
+      "key": "other-9536368",
+      "title": "Консультации",
+      "parent": "other",
+      "order": 12
+    },
+    {
+      "key": "other-9536367",
+      "title": "Капельницы",
+      "parent": "other",
+      "order": 13
+    },
+    {
+      "key": "other-17803670",
+      "title": "По абонементам",
+      "parent": "other",
+      "order": 15
+    },
+    {
+      "key": "other-28566429",
+      "title": "Микротоки",
+      "parent": "other",
+      "order": 20
+    },
+    {
+      "key": "other-9472350",
+      "title": "Категория 9472350",
+      "parent": "other",
+      "order": 21
+    }
+  ],
+  "services": [
+    {
+      "yclientsId": "9472356",
+      "expectedTitle": "еуые",
+      "categories": [
+        "other-9472350"
+      ]
+    },
+    {
+      "yclientsId": "9536380",
+      "expectedTitle": "Belotero lips contur 0,6 ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "9536492",
+      "expectedTitle": "Meso-Sculpt 1 ml ( 30 минут )",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536493",
+      "expectedTitle": "MesoEye 1ml ( 60 минут )",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536494",
+      "expectedTitle": "MesoWharton 1,5 ml ( 60 минут)",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536495",
+      "expectedTitle": "Profhilo 2 ml ( 60 минут )",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536496",
+      "expectedTitle": "Revi Silk 1 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536497",
+      "expectedTitle": "Revi Silk 2 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536498",
+      "expectedTitle": "Revi Strong 1 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536499",
+      "expectedTitle": "Revi Style 1 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536661",
+      "expectedTitle": "Revi Style 2 mll",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536662",
+      "expectedTitle": "Revi eye 1 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536663",
+      "expectedTitle": "Revi strong 2 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536665",
+      "expectedTitle": "Stylage Hydro 1ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "9536667",
+      "expectedTitle": "Stylage M 1 ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "9536668",
+      "expectedTitle": "Stylage M Lidocaine",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "9536671",
+      "expectedTitle": "Анестезия  1 зона  30 гр",
+      "categories": [
+        "price-additional-226"
+      ]
+    },
+    {
+      "yclientsId": "9536674",
+      "expectedTitle": "Биоревитализация",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "9536677",
+      "expectedTitle": "Ботулинотерапия  Диспорт 1 ед ( 30 минут )",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "9536689",
+      "expectedTitle": "Лечение гипергидроза 1 зона",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "9536690",
+      "expectedTitle": "КОКТЕЙЛЬ ХУДОЕ ЛИЦО 2 ML ( 30 минут)",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536695",
+      "expectedTitle": "Липолитический коктейль MPX 5 ml ( 30 минут )",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "9536698",
+      "expectedTitle": "Липолитический коктейль Slim Body 5 ml ( 30 минут )",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "9536699",
+      "expectedTitle": "Лонгидаза 1 доза",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "9536701",
+      "expectedTitle": "МеsoXantin 1,5 ml ( 60 минут )",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "9536708",
+      "expectedTitle": "Мезотерапия укрепление/рост волос 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya",
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "9536713",
+      "expectedTitle": "Увеличение губ",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "9536716",
+      "expectedTitle": "Введение в/в лекарства",
+      "categories": [
+        "other-9536367"
+      ]
+    },
+    {
+      "yclientsId": "9536717",
+      "expectedTitle": "Введение в/м и в/п лекарств",
+      "categories": [
+        "other-9536367"
+      ]
+    },
+    {
+      "yclientsId": "9536720",
+      "expectedTitle": "Плацентарная \"Лаеннек\" 2/4 ml",
+      "categories": [
+        "other-9536367"
+      ]
+    },
+    {
+      "yclientsId": "9536723",
+      "expectedTitle": "Дерматологическая/косметологическая консультация",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "9536724",
+      "expectedTitle": "Дерматологическая\\Косметологическая консультация повторный прием",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "9536725",
+      "expectedTitle": "Косметологическая консультация",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "9536726",
+      "expectedTitle": "Трихологическая консультация",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "9536727",
+      "expectedTitle": "Трихологическая консультация повторный прием",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "9536729",
+      "expectedTitle": "Бедра 1 зона",
+      "categories": [
+        "other-9536369"
+      ]
+    },
+    {
+      "yclientsId": "9536730",
+      "expectedTitle": "Бедра полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536731",
+      "expectedTitle": "Белая линия живота",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536732",
+      "expectedTitle": "Бритье малой зоны",
+      "categories": [
+        "other-9536369"
+      ]
+    },
+    {
+      "yclientsId": "9536733",
+      "expectedTitle": "Виски или бакенбарды или нос",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536734",
+      "expectedTitle": "Голени с коленями",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536735",
+      "expectedTitle": "Грудь полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536736",
+      "expectedTitle": "Декольте",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536737",
+      "expectedTitle": "Живот полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536738",
+      "expectedTitle": "Кисти рук",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536739",
+      "expectedTitle": "Кисти рук с пальцами",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536740",
+      "expectedTitle": "Классическое бикини",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536741",
+      "expectedTitle": "Колени",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536742",
+      "expectedTitle": "Лицо полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536743",
+      "expectedTitle": "Лоб",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536744",
+      "expectedTitle": "Малая зона (верхняя губа\\подбородок\\межбровье)",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536745",
+      "expectedTitle": "Межъягодичная зона",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536746",
+      "expectedTitle": "Ноги полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536747",
+      "expectedTitle": "Одноразовая бритва 1шт",
+      "categories": [
+        "other-9536369"
+      ]
+    },
+    {
+      "yclientsId": "9536748",
+      "expectedTitle": "Ореолы",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536749",
+      "expectedTitle": "Пальцы ног",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536750",
+      "expectedTitle": "Пальцы рук",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536751",
+      "expectedTitle": "Плечи",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536752",
+      "expectedTitle": "Подмышки 1",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536753",
+      "expectedTitle": "Руки до локтя",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536754",
+      "expectedTitle": "Руки полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536755",
+      "expectedTitle": "Спина нижняя треть (поясница\\крестец)",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536756",
+      "expectedTitle": "Спина полностью",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536757",
+      "expectedTitle": "Стопа",
+      "categories": [
+        "other-9536369"
+      ]
+    },
+    {
+      "yclientsId": "9536758",
+      "expectedTitle": "Стопа с пальцами ног",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536759",
+      "expectedTitle": "Тотальное бикини",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536760",
+      "expectedTitle": "Шея ( передняя и задняя поверхность)",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536761",
+      "expectedTitle": "Щеки",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536762",
+      "expectedTitle": "Ягодицы",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536763",
+      "expectedTitle": "№1 Ноги полностью + руки полностью + тотальное бикини + подмышки",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536765",
+      "expectedTitle": "№2 Ноги полностью + бикини тотальное + подмышки",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536766",
+      "expectedTitle": "№3 Голень с коленями + бикини тотальное + подмышки",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536767",
+      "expectedTitle": "№4 Бикини тотальное + подмышки",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "9536773",
+      "expectedTitle": "Инновационный пилинг BioRePeel ( 30 минут)",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "9536775",
+      "expectedTitle": "Инновационный пилинг PRXT33 ( 30 минут )",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "9536777",
+      "expectedTitle": "Комбинированная чистка лица",
+      "categories": [
+        "price-kosmetologicheskie-chistki"
+      ]
+    },
+    {
+      "yclientsId": "9536778",
+      "expectedTitle": "Комплексная чистка спины",
+      "categories": [
+        "price-kosmetologicheskie-chistki"
+      ]
+    },
+    {
+      "yclientsId": "9536781",
+      "expectedTitle": "Микротоковая Лимфодренаж 20 минут",
+      "categories": [
+        "price-mikrotokovaya-terapiya"
+      ]
+    },
+    {
+      "yclientsId": "9536782",
+      "expectedTitle": "Микротоковая Лифтинг 40 минут",
+      "categories": [
+        "other-28566429"
+      ]
+    },
+    {
+      "yclientsId": "9536783",
+      "expectedTitle": "Микротоковая Лифтинг сет лицо и шея(уход+микротоки) 60 мин",
+      "categories": [
+        "price-mikrotokovaya-terapiya"
+      ]
+    },
+    {
+      "yclientsId": "9536787",
+      "expectedTitle": "Прокалывание ушей",
+      "categories": [
+        "other-9536371"
+      ]
+    },
+    {
+      "yclientsId": "9536790",
+      "expectedTitle": "Уход Forever Young (уход с лифтинг массажем)",
+      "categories": [
+        "other-9536371"
+      ]
+    },
+    {
+      "yclientsId": "9648699",
+      "expectedTitle": "BEAUTYLISER RSL скульптурирование",
+      "categories": [
+        "price-beautylizer"
+      ]
+    },
+    {
+      "yclientsId": "11818817",
+      "expectedTitle": "Запрет на отправку",
+      "categories": [
+        "other-15394166"
+      ]
+    },
+    {
+      "yclientsId": "12496002",
+      "expectedTitle": "Антистресс",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "12496003",
+      "expectedTitle": "Бодрость",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "12496004",
+      "expectedTitle": "Детокс",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "12496005",
+      "expectedTitle": "Железная леди",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "12496006",
+      "expectedTitle": "Золушка",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "12496007",
+      "expectedTitle": "Красивые волосы",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "12496008",
+      "expectedTitle": "Лаеннек 4 ml",
+      "categories": [
+        "other-9536367"
+      ]
+    },
+    {
+      "yclientsId": "12496009",
+      "expectedTitle": "Стройное тело",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "15393796",
+      "expectedTitle": "Антистресс по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393797",
+      "expectedTitle": "Бодрость по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393799",
+      "expectedTitle": "Детокс по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393800",
+      "expectedTitle": "Жел леди по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393801",
+      "expectedTitle": "Золушка по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393802",
+      "expectedTitle": "Красивые волосы по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393803",
+      "expectedTitle": "Стройное тело по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393806",
+      "expectedTitle": "RSL 10",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393807",
+      "expectedTitle": "RSL 12",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393808",
+      "expectedTitle": "RSL 6",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393814",
+      "expectedTitle": "HELEO Спина по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393815",
+      "expectedTitle": "HELEO4 Лицо по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15393816",
+      "expectedTitle": "HELEO4 Лицо\\Шея\\Декольте по Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "15394018",
+      "expectedTitle": "5в1Лоб+брови+межбровье+глаза+нос",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394021",
+      "expectedTitle": "Aliaxin LV",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "15394022",
+      "expectedTitle": "Belotero Intense 1ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "15394034",
+      "expectedTitle": "Novacutan Sbio 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "15394035",
+      "expectedTitle": "Novacutan Ybio",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "15394039",
+      "expectedTitle": "STYLAGE L",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "15394041",
+      "expectedTitle": "STYLAGE S",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "15394042",
+      "expectedTitle": "Viscoderm Hydro Booster",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "15394043",
+      "expectedTitle": "Ботулинотерапия Кончик носа",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394044",
+      "expectedTitle": "Ботулинотерапия Коррекция нижней челюсти (бруксизм)",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394045",
+      "expectedTitle": "Ботулинотерапия Крылья носа",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394046",
+      "expectedTitle": "Ботулинотерапия Лечение десневой (гингивальной) улыбки",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394047",
+      "expectedTitle": "Ботулинотерапия Лифтинг бровей",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394048",
+      "expectedTitle": "Ботулинотерапия Лоб + межбровье",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394050",
+      "expectedTitle": "Ботулинотерапия Межбровье",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394051",
+      "expectedTitle": "Ботулинотерапия Подбородок",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394052",
+      "expectedTitle": "Ботулинотерапия Поднятие уголков рта",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394053",
+      "expectedTitle": "Ботулинотерапия Спинка носа",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394054",
+      "expectedTitle": "Ботулинотерапия Уголки глаз (\"гусиные лапки»)",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394056",
+      "expectedTitle": "Ботулинотерапия Шея (тяжи платизмы)",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394061",
+      "expectedTitle": "Миотокс 1ед",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "15394063",
+      "expectedTitle": "Плазмолифтинг/Плазмотерапия Кисти рук (обе)",
+      "categories": [
+        "price-plazmoterapiya-plazmolifting"
+      ]
+    },
+    {
+      "yclientsId": "15394064",
+      "expectedTitle": "Плазмолифтинг/Плазмотерапия Шея+Декольте",
+      "categories": [
+        "price-plazmoterapiya-plazmolifting"
+      ]
+    },
+    {
+      "yclientsId": "15394065",
+      "expectedTitle": "Плазмотерапия Волосистая часть головы (1пробирка)",
+      "categories": [
+        "price-plazmoterapiya-plazmolifting",
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "15394070",
+      "expectedTitle": "Stylage Special lips",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "15394074",
+      "expectedTitle": "Дерматологическая консультация гл. врач Гаджиева П.И. первич",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "15394075",
+      "expectedTitle": "Дерматологическая консультация гл. врач Гаджиева П.И. повт",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "15394076",
+      "expectedTitle": "Дерматоскопия",
+      "categories": [
+        "other-9536368"
+      ]
+    },
+    {
+      "yclientsId": "15394077",
+      "expectedTitle": "Косметологическая консультация гл. врач Гаджиева П.И. первич",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "15394078",
+      "expectedTitle": "Косметологическая консультация гл. врач Гаджиева П.И. повт",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "15394079",
+      "expectedTitle": "Трихоскопия",
+      "categories": [
+        "other-9536368"
+      ]
+    },
+    {
+      "yclientsId": "15394080",
+      "expectedTitle": "косметологическая консультация повтор",
+      "categories": [
+        "price-additional-273"
+      ]
+    },
+    {
+      "yclientsId": "15394087",
+      "expectedTitle": "Восстанавливающая пептидная маска",
+      "categories": [
+        "other-9536371"
+      ]
+    },
+    {
+      "yclientsId": "15394088",
+      "expectedTitle": "Джеснера Enerpeel",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394089",
+      "expectedTitle": "MELine: отбеливание интимных зон",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394090",
+      "expectedTitle": "MELine: отбеливание подмышечных впадин",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394091",
+      "expectedTitle": "MELine: от пигментации, лицо",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394095",
+      "expectedTitle": "Миндальный Enerpeel",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394096",
+      "expectedTitle": "Пиллинг Peach peel",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394097",
+      "expectedTitle": "Салициловый Enerpeel",
+      "categories": [
+        "price-kosemotologicheskie-pilingi"
+      ]
+    },
+    {
+      "yclientsId": "15394104",
+      "expectedTitle": "HELEO4 LED",
+      "categories": [
+        "price-heleo"
+      ]
+    },
+    {
+      "yclientsId": "15394105",
+      "expectedTitle": "HELEO4 Кисти рук",
+      "categories": [
+        "price-heleo"
+      ]
+    },
+    {
+      "yclientsId": "15394106",
+      "expectedTitle": "HELEO4 Лицо",
+      "categories": [
+        "price-heleo"
+      ]
+    },
+    {
+      "yclientsId": "15394107",
+      "expectedTitle": "HELEO4 Лицо\\Шея\\Декольте",
+      "categories": [
+        "price-heleo"
+      ]
+    },
+    {
+      "yclientsId": "15394108",
+      "expectedTitle": "HELEO4 Спина",
+      "categories": [
+        "price-heleo"
+      ]
+    },
+    {
+      "yclientsId": "15394119",
+      "expectedTitle": "Morpheus 8 - глаза",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394120",
+      "expectedTitle": "Morpheus 8 - декольте",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394121",
+      "expectedTitle": "Morpheus 8 - кисти рук",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394123",
+      "expectedTitle": "Morpheus 8 - лицо",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394124",
+      "expectedTitle": "Morpheus 8 - лицо, шея",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394126",
+      "expectedTitle": "Morpheus 8 - лицо, шея, декольте",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394127",
+      "expectedTitle": "Morpheus 8 - тело: живот",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394128",
+      "expectedTitle": "Morpheus 8 - тело: колени",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394130",
+      "expectedTitle": "Morpheus 8 - тело: локти",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394131",
+      "expectedTitle": "Morpheus 8 - тело: область бедер",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394132",
+      "expectedTitle": "Morpheus 8 - тело: руки",
+      "categories": [
+        "other-15394116"
+      ]
+    },
+    {
+      "yclientsId": "15394133",
+      "expectedTitle": "Morpheus 8 - тело: ягодицы",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394134",
+      "expectedTitle": "Morpheus 8 - шея",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394135",
+      "expectedTitle": "Morpheus 8 - шея, декольте",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "15394143",
+      "expectedTitle": "Фотоомоложение - минимальная зона",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "15394151",
+      "expectedTitle": "Фотоомоложение Lumeca - кисти рук",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "15394152",
+      "expectedTitle": "Фотоомоложение Lumeca - лицо",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "15394153",
+      "expectedTitle": "Фотоомоложение Lumeca - лицо, шея",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "15394154",
+      "expectedTitle": "Фотоомоложение Lumeca - лицо, шея, декольте",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "15394186",
+      "expectedTitle": "AestheFill 10ml",
+      "categories": [
+        "price-additional-285"
+      ]
+    },
+    {
+      "yclientsId": "15394187",
+      "expectedTitle": "Linerase",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "15394188",
+      "expectedTitle": "NITHYA",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "15394189",
+      "expectedTitle": "Sculptra 10ml",
+      "categories": [
+        "price-additional-285"
+      ]
+    },
+    {
+      "yclientsId": "15394193",
+      "expectedTitle": "Коллост микро",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "15394201",
+      "expectedTitle": "Анти акне",
+      "categories": [
+        "other-15394165"
+      ]
+    },
+    {
+      "yclientsId": "15394202",
+      "expectedTitle": "Безоперационное омоложение",
+      "categories": [
+        "other-15394165"
+      ]
+    },
+    {
+      "yclientsId": "15394203",
+      "expectedTitle": "Идеальный силуэт",
+      "categories": [
+        "other-15394165"
+      ]
+    },
+    {
+      "yclientsId": "15394204",
+      "expectedTitle": "Сила и длина",
+      "categories": [
+        "other-15394165"
+      ]
+    },
+    {
+      "yclientsId": "15394205",
+      "expectedTitle": "Фотошоп в жизни",
+      "categories": [
+        "other-15394165"
+      ]
+    },
+    {
+      "yclientsId": "17479618",
+      "expectedTitle": "Skinko E",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "17479858",
+      "expectedTitle": "Мезотерапия волос Аб 10",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "17803675",
+      "expectedTitle": "Tesla former Аб",
+      "categories": [
+        "other-17803670"
+      ]
+    },
+    {
+      "yclientsId": "17941416",
+      "expectedTitle": "Tesla former",
+      "categories": [
+        "price-tesla-former"
+      ]
+    },
+    {
+      "yclientsId": "17987374",
+      "expectedTitle": "Plinest 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "17987375",
+      "expectedTitle": "Plinest Fast 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "17987378",
+      "expectedTitle": "Муж. Комплекс 5в1 лоб+межбровье+глаза+нос",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987379",
+      "expectedTitle": "Муж. Кончик носа",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987380",
+      "expectedTitle": "Муж. Коррекция нижней челюсти (бруксизм)",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987381",
+      "expectedTitle": "Муж. Крылья носа",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987382",
+      "expectedTitle": "Муж. Лечение гипергидроза",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987383",
+      "expectedTitle": "Муж. Лечение десневой (гингивальной) улыбки",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987384",
+      "expectedTitle": "Муж. Лифтинг бровей",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987385",
+      "expectedTitle": "Муж. Лоб+Межбровье",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987386",
+      "expectedTitle": "Муж. Межбровье",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987387",
+      "expectedTitle": "Муж. Подбородок",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987388",
+      "expectedTitle": "Муж. Поднятие уголков рта",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987389",
+      "expectedTitle": "Муж. Спинка носа",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987390",
+      "expectedTitle": "Муж. Уголки глаз \"Гусиные лапки\"",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "17987391",
+      "expectedTitle": "Муж. Шея (тяжи платизмы)",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "18845025",
+      "expectedTitle": "1 доп. линия",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "18845026",
+      "expectedTitle": "1200 линий",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "18845027",
+      "expectedTitle": "300 линий",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "18845028",
+      "expectedTitle": "400 линий",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "18845029",
+      "expectedTitle": "500 линий",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "18845031",
+      "expectedTitle": "600 линий",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "18845032",
+      "expectedTitle": "800 линий",
+      "categories": [
+        "price-volnewmer"
+      ]
+    },
+    {
+      "yclientsId": "24270042",
+      "expectedTitle": "IALEST 2 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "24271110",
+      "expectedTitle": "MESOXANTIN 1,5ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "24271515",
+      "expectedTitle": "Фотоомоложение Lumeca - крылья носа",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "24271521",
+      "expectedTitle": "Фотоомоложение Lumeca - область декольте",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "24271527",
+      "expectedTitle": "Фотоомоложение Lumeca - подбородок",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "24271530",
+      "expectedTitle": "Фотоомоложение Lumeca - шея",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "24271533",
+      "expectedTitle": "Фотоомоложение Lumeca - щеки",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "24271554",
+      "expectedTitle": "Juvelook",
+      "categories": [
+        "price-additional-285"
+      ]
+    },
+    {
+      "yclientsId": "24271557",
+      "expectedTitle": "Lenisna",
+      "categories": [
+        "price-additional-285"
+      ]
+    },
+    {
+      "yclientsId": "24271560",
+      "expectedTitle": "Коллост микро 5ml + NCTF/Skinco",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "24271563",
+      "expectedTitle": "Коллост микро 5ml +плазма",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "24293871",
+      "expectedTitle": "Morpheus: Руки до локтей",
+      "categories": [
+        "price-rf-lifting-inmode"
+      ]
+    },
+    {
+      "yclientsId": "24372813",
+      "expectedTitle": "Плазмолифтинг/Плазмотерапия - лицо",
+      "categories": [
+        "price-plazmoterapiya-plazmolifting"
+      ]
+    },
+    {
+      "yclientsId": "24857550",
+      "expectedTitle": "экзосомы",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "25506849",
+      "expectedTitle": "Лифтинг программа объемного 3D моделирования",
+      "categories": [
+        "price-uhodovye-procedury"
+      ]
+    },
+    {
+      "yclientsId": "25506852",
+      "expectedTitle": "Моделирующая процедура с королевской маской",
+      "categories": [
+        "price-uhodovye-procedury"
+      ]
+    },
+    {
+      "yclientsId": "25506855",
+      "expectedTitle": "Экспресс-уход \"Sparkling\"",
+      "categories": [
+        "price-uhodovye-procedury"
+      ]
+    },
+    {
+      "yclientsId": "26099267",
+      "expectedTitle": "1 доп импульс",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099269",
+      "expectedTitle": "1000 ИМП Лицо и шея лечение",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099270",
+      "expectedTitle": "1200 ИМП Лицо + шея лечение и омоложение",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099271",
+      "expectedTitle": "1400 ИМП Лицо + шея Шлифовка, лифтинг",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099272",
+      "expectedTitle": "1600 ИМП Тело лечение",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099273",
+      "expectedTitle": "2000 ИМП Тело + спина Шлифовка",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099274",
+      "expectedTitle": "300 ИМП Глаза",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099275",
+      "expectedTitle": "600 ИМП Лицо лечение",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26099276",
+      "expectedTitle": "800 ИМП Лицо лечение и омоложение",
+      "categories": [
+        "price-pladuo"
+      ]
+    },
+    {
+      "yclientsId": "26274930",
+      "expectedTitle": "Tesla пробная",
+      "categories": [
+        "price-tesla-former"
+      ]
+    },
+    {
+      "yclientsId": "30628767",
+      "expectedTitle": "Контурная пластика",
+      "categories": [
+        "other-9536366"
+      ]
+    },
+    {
+      "yclientsId": "32814594",
+      "expectedTitle": "Комбинированная чистка лица + peach peel",
+      "categories": [
+        "other-9536371"
+      ]
+    },
+    {
+      "yclientsId": "32814634",
+      "expectedTitle": "Коктейль Slim Body 10 мл",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32814649",
+      "expectedTitle": "Плацентарная терапия, 2 ml",
+      "categories": [
+        "price-droppers"
+      ]
+    },
+    {
+      "yclientsId": "32814679",
+      "expectedTitle": "Фотоомоложение Lumeca - спина",
+      "categories": [
+        "price-pigment-lumec"
+      ]
+    },
+    {
+      "yclientsId": "32814704",
+      "expectedTitle": "Аппаратное очищение и увлажнение кожи ProFacial лицо",
+      "categories": [
+        "price-profeccial"
+      ]
+    },
+    {
+      "yclientsId": "32814709",
+      "expectedTitle": "Аппаратное очищение и увлажнение кожи ProFacial лицо и шея",
+      "categories": [
+        "price-profeccial"
+      ]
+    },
+    {
+      "yclientsId": "32814714",
+      "expectedTitle": "Аппаратное очищение и увлажнение кожи ProFacial лицо, шея и декольте",
+      "categories": [
+        "price-profeccial"
+      ]
+    },
+    {
+      "yclientsId": "32814719",
+      "expectedTitle": "Аппаратное очищение и увлажнение кожи ProFacial шея",
+      "categories": [
+        "price-profeccial"
+      ]
+    },
+    {
+      "yclientsId": "32814724",
+      "expectedTitle": "Аппаратное очищение и увлажнение кожи ProFacial декольте",
+      "categories": [
+        "price-profeccial"
+      ]
+    },
+    {
+      "yclientsId": "32814729",
+      "expectedTitle": "Heleo4 головы 30 минут",
+      "categories": [
+        "price-heleo",
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "32842984",
+      "expectedTitle": "Aliaxin EV 1ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "32842989",
+      "expectedTitle": "Bellarti Nucleo 20 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32842999",
+      "expectedTitle": "Bellarti Nucleo 7,5 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya",
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "32843004",
+      "expectedTitle": "Bellarti Vita 2ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32843009",
+      "expectedTitle": "Bellarti Vita Plus 2 ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32843014",
+      "expectedTitle": "Belotero Balance 1 ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "32843019",
+      "expectedTitle": "Belotero Soft 1ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "32843024",
+      "expectedTitle": "Curacen",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32843029",
+      "expectedTitle": "MESOSCULPT C71 1ml",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32843039",
+      "expectedTitle": "Stylage S lidocaine 0,8 ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "32843044",
+      "expectedTitle": "Stylage XL 1 ml",
+      "categories": [
+        "price-konturnaya-plastika"
+      ]
+    },
+    {
+      "yclientsId": "32843064",
+      "expectedTitle": "Ботулинотерапия-(кисеты) мышца рта",
+      "categories": [
+        "price-botullinoterapiya"
+      ]
+    },
+    {
+      "yclientsId": "32843069",
+      "expectedTitle": "Гиалтокс (мезо+ботокс)",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya"
+      ]
+    },
+    {
+      "yclientsId": "32843079",
+      "expectedTitle": "Канюля 1 шт",
+      "categories": [
+        "price-additional-226"
+      ]
+    },
+    {
+      "yclientsId": "32843084",
+      "expectedTitle": "Экзосомальная терапия Ersaless Infosys",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya",
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "32843094",
+      "expectedTitle": "Экзосомальная терапия ExoCoBio ASCEplus Scalp для кожи головы, 20мг",
+      "categories": [
+        "price-mezoterapiya-i-biorevitalizaciya",
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "32843159",
+      "expectedTitle": "№5: ноги полностью + руки полностью + тотальное бикини + белая линия живота + подмышки + верхняя губа",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "32843164",
+      "expectedTitle": "№6: руки полностью + ноги полностью + подмышки + глубокое бикини + поясница + живот + ягодицы",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "32843169",
+      "expectedTitle": "№7: все зоны на лице и теле",
+      "categories": [
+        "price-laser-epilation"
+      ]
+    },
+    {
+      "yclientsId": "32843174",
+      "expectedTitle": "Аргоновая плазма 300 импульсов",
+      "categories": [
+        "price-additional-333"
+      ]
+    },
+    {
+      "yclientsId": "32843189",
+      "expectedTitle": "Agentcol 003col + 004col 4ml",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "32843199",
+      "expectedTitle": "Agentcol 003col 2ml",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "32843204",
+      "expectedTitle": "Agentcol 004col 2ml",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "32843209",
+      "expectedTitle": "Гель КОЛЛОСТ 15% 1,5 ml",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "32843214",
+      "expectedTitle": "Гель КОЛЛОСТ 7% 1 ml",
+      "categories": [
+        "price-additional-260"
+      ]
+    },
+    {
+      "yclientsId": "32843224",
+      "expectedTitle": "Карбокситерапия Genosys",
+      "categories": [
+        "price-uhodovye-procedury"
+      ]
+    },
+    {
+      "yclientsId": "32843229",
+      "expectedTitle": "Комбинированная чистка лица + пилинг",
+      "categories": [
+        "price-kosmetologicheskie-chistki"
+      ]
+    },
+    {
+      "yclientsId": "32843234",
+      "expectedTitle": "Королевский лифтинг микротоки + уход Forlle’d",
+      "categories": [
+        "price-mikrotokovaya-terapiya"
+      ]
+    }
+  ],
+  "oldCategories": [
+    {
+      "path": [
+        "Инъекционная косметология"
+      ],
+      "destination": "root-2"
+    },
+    {
+      "path": [
+        "Эстетическая косметология"
+      ],
+      "destination": "root-3"
+    },
+    {
+      "path": [
+        "Коллагенотерапия"
+      ],
+      "destination": "price-additional-260"
+    },
+    {
+      "path": [
+        "Inmode"
+      ],
+      "destination": "root-1"
+    },
+    {
+      "path": [
+        "Volnewmer"
+      ],
+      "destination": "price-volnewmer"
+    },
+    {
+      "path": [
+        "Лазерная эпиляция"
+      ],
+      "destination": "price-laser-epilation"
+    },
+    {
+      "path": [
+        "Комплексы"
+      ],
+      "destination": "other-15394165"
+    },
+    {
+      "path": [
+        "HELEO4"
+      ],
+      "destination": "price-heleo"
+    },
+    {
+      "path": [
+        "ProFacial"
+      ],
+      "destination": "price-profeccial"
+    },
+    {
+      "path": [
+        "Техническая"
+      ],
+      "destination": "other-15394166"
+    },
+    {
+      "path": [
+        "RSL-скульптурирование"
+      ],
+      "destination": "price-beautylizer"
+    },
+    {
+      "path": [
+        "Консультации"
+      ],
+      "destination": "price-additional-273"
+    },
+    {
+      "path": [
+        "Капельницы"
+      ],
+      "destination": "price-droppers"
+    },
+    {
+      "path": [
+        "Tesla Former"
+      ],
+      "destination": "price-tesla-former"
+    },
+    {
+      "path": [
+        "По абонементам"
+      ],
+      "destination": "other-17803670"
+    },
+    {
+      "path": [
+        "Уходы от Forlle`d"
+      ],
+      "destination": "price-uhodovye-procedury"
+    },
+    {
+      "path": [
+        "Pladuo"
+      ],
+      "destination": "price-pladuo"
+    },
+    {
+      "path": [
+        "Без группы"
+      ],
+      "destination": "other"
+    },
+    {
+      "path": [
+        "Полимолочная кислота"
+      ],
+      "destination": "price-additional-285"
+    },
+    {
+      "path": [
+        "Микротоки"
+      ],
+      "destination": "price-mikrotokovaya-terapiya"
+    },
+    {
+      "path": [
+        "Категория 9472350"
+      ],
+      "destination": "other-9472350"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Биоревитализация"
+      ],
+      "destination": "price-mezoterapiya-i-biorevitalizaciya"
+    },
+    {
+      "path": [
+        "Консультации",
+        "Дерматология / Косметология"
+      ],
+      "destination": "price-additional-273"
+    },
+    {
+      "path": [
+        "Консультации",
+        "Трихология"
+      ],
+      "destination": "price-additional-273"
+    },
+    {
+      "path": [
+        "Inmode",
+        "Фотоомоложение LUMECCA"
+      ],
+      "destination": "price-pigment-lumec"
+    },
+    {
+      "path": [
+        "Inmode",
+        "Morpheus 8"
+      ],
+      "destination": "price-rf-lifting-inmode"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Увеличение губ"
+      ],
+      "destination": "price-konturnaya-plastika"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Контурная пластика"
+      ],
+      "destination": "price-konturnaya-plastika"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Ботулинотерапия"
+      ],
+      "destination": "price-botullinoterapiya"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Мезотерапия"
+      ],
+      "destination": "price-mezoterapiya-i-biorevitalizaciya"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Плазмолифтинг / плазмотерапия"
+      ],
+      "destination": "price-plazmoterapiya-plazmolifting"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Липолитики"
+      ],
+      "destination": "price-mezoterapiya-i-biorevitalizaciya"
+    },
+    {
+      "path": [
+        "Инъекционная косметология",
+        "Дополнительно"
+      ],
+      "destination": "price-additional-226"
+    },
+    {
+      "path": [
+        "Коллагенотерапия",
+        "Полимолочная кислота"
+      ],
+      "destination": "price-additional-285"
+    },
+    {
+      "path": [
+        "Эстетическая косметология",
+        "Микротоковая терапия"
+      ],
+      "destination": "price-mikrotokovaya-terapiya"
+    },
+    {
+      "path": [
+        "Эстетическая косметология",
+        "Косметологические пилинги"
+      ],
+      "destination": "price-kosemotologicheskie-pilingi"
+    },
+    {
+      "path": [
+        "Эстетическая косметология",
+        "МИЛАЙН"
+      ],
+      "destination": "price-kosemotologicheskie-pilingi"
+    },
+    {
+      "path": [
+        "Эстетическая косметология",
+        "Чистки"
+      ],
+      "destination": "price-kosmetologicheskie-chistki"
+    },
+    {
+      "path": [
+        "Эстетическая косметология",
+        "Дополнительно"
+      ],
+      "destination": "price-additional-226"
+    },
+    {
+      "path": [
+        "Эстетическая косметология",
+        "Уходовые процедуры"
+      ],
+      "destination": "price-uhodovye-procedury"
+    }
+  ],
+  "comparison": [
+    {
+      "section": "price-additional-273",
+      "websiteTitle": "Дерматологическая/косметологическая консультация",
+      "serviceIds": [
+        "9536723",
+        "9536725",
+        "15394074",
+        "15394077"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-273",
+      "websiteTitle": "Дерматологическая\\Косметологическая консультация повторный прием",
+      "serviceIds": [
+        "9536724",
+        "15394075",
+        "15394078",
+        "15394080"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-273",
+      "websiteTitle": "Трихологическая консультация",
+      "serviceIds": [
+        "9536726"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-273",
+      "websiteTitle": "Трихологическая консультация повторный прием",
+      "serviceIds": [
+        "9536727"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Лицо",
+      "serviceIds": [
+        "15394152"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Шея",
+      "serviceIds": [
+        "24271530"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Область декольте",
+      "serviceIds": [
+        "24271521"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Лицо + шея",
+      "serviceIds": [
+        "15394153"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Лицо + шея + декольте",
+      "serviceIds": [
+        "15394154"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Кисти рук (обе руки)",
+      "serviceIds": [
+        "15394151"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Спина",
+      "serviceIds": [
+        "32814679"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Щеки",
+      "serviceIds": [
+        "24271533"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Подбородок",
+      "serviceIds": [
+        "24271527"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Крылья носа",
+      "serviceIds": [
+        "24271515"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pigment-lumec",
+      "websiteTitle": "Минимальная зона 5 кв. см",
+      "serviceIds": [
+        "15394143"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Лицо",
+      "serviceIds": [
+        "15394123"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Шея",
+      "serviceIds": [
+        "15394134"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Лицо, шея",
+      "serviceIds": [
+        "15394124"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Лицо, шея, декольте",
+      "serviceIds": [
+        "15394126"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Шея, декольте",
+      "serviceIds": [
+        "15394135"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Декольте",
+      "serviceIds": [
+        "15394120"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Глаза",
+      "serviceIds": [
+        "15394119"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Живот",
+      "serviceIds": [
+        "15394127"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Колени",
+      "serviceIds": [
+        "15394128"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Локти",
+      "serviceIds": [
+        "15394130"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Руки до локтей",
+      "serviceIds": [
+        "24293871"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Кисти рук",
+      "serviceIds": [
+        "15394121"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Ягодицы",
+      "serviceIds": [
+        "15394133"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-rf-lifting-inmode",
+      "websiteTitle": "Область бедер",
+      "serviceIds": [
+        "15394131"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "300 импульсов",
+      "serviceIds": [
+        "18845027"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "400 импульсов",
+      "serviceIds": [
+        "18845028"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "500 импульсов",
+      "serviceIds": [
+        "18845029"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "600 импульсов",
+      "serviceIds": [
+        "18845031"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "800 импульсов",
+      "serviceIds": [
+        "18845032"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "1200 импульсов",
+      "serviceIds": [
+        "18845026"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-volnewmer",
+      "websiteTitle": "1 доп. импульс",
+      "serviceIds": [
+        "18845025"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-tesla-former",
+      "websiteTitle": "Первая процедура-знакомство",
+      "serviceIds": [
+        "26274930"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-tesla-former",
+      "websiteTitle": "Одна зона, 30 мин",
+      "serviceIds": [
+        "17941416"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-tesla-former",
+      "websiteTitle": "Курс 10 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-tesla-former",
+      "websiteTitle": "Курс 5 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Зона глаз, 300 импульсов",
+      "serviceIds": [
+        "26099274"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Лицо (лечение), 600 импульсов",
+      "serviceIds": [
+        "26099275"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Лицо (лечение и омоложение), 800 импульсов",
+      "serviceIds": [
+        "26099276"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Лицо и шея (лечение), 1000 импульсов",
+      "serviceIds": [
+        "26099269"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Лицо и шея (лечение, омоложение), 1200 импульсов",
+      "serviceIds": [
+        "26099270"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Лицо и шея (шлифовка, лифтинг), 1400 импульсов",
+      "serviceIds": [
+        "26099271"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Тело (лечение), 1600 импульсов",
+      "serviceIds": [
+        "26099272"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "Тело и спина (шлифовка), 2000 импульсов",
+      "serviceIds": [
+        "26099273"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-pladuo",
+      "websiteTitle": "1 доп. импульс",
+      "serviceIds": [
+        "26099267"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-beautylizer",
+      "websiteTitle": "1 процедура",
+      "serviceIds": [
+        "9648699"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-beautylizer",
+      "websiteTitle": "Абонемент 6 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-beautylizer",
+      "websiteTitle": "Абонемент 10 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-beautylizer",
+      "websiteTitle": "Абонемент 12 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№1: ноги полностью + руки полностью + тотальное бикини + подмышки",
+      "serviceIds": [
+        "9536763"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№2: ноги полностью + бикини тотальное + подмышки",
+      "serviceIds": [
+        "9536765"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№3: голень с коленями + бикини тотальное + подмышки",
+      "serviceIds": [
+        "9536766"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№4: бикини тотальное + подмышки",
+      "serviceIds": [
+        "9536767"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№5: ноги полностью + руки полностью + тотальное бикини + белая линия живота + подмышки + верхняя губа",
+      "serviceIds": [
+        "32843159"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№6: руки полностью + ноги полностью + подмышки + глубокое бикини + поясница + живот + ягодицы",
+      "serviceIds": [
+        "32843164"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "№7: все зоны на лице и теле",
+      "serviceIds": [
+        "32843169"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Лицо полностью",
+      "serviceIds": [
+        "9536742"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Лоб",
+      "serviceIds": [
+        "9536743"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Щеки",
+      "serviceIds": [
+        "9536761"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Виски, или бакенбарды, или нос",
+      "serviceIds": [
+        "9536733"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Малая зона (верхняя губа / подбородок / межбровье)",
+      "serviceIds": [
+        "9536744"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Шея (передняя и задняя поверхность)",
+      "serviceIds": [
+        "9536760"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Руки полностью",
+      "serviceIds": [
+        "9536754"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Руки до локтя",
+      "serviceIds": [
+        "9536753"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Подмышки",
+      "serviceIds": [
+        "9536752"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Пальцы рук",
+      "serviceIds": [
+        "9536750"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Кисти рук с пальцами",
+      "serviceIds": [
+        "9536739"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Кисти рук",
+      "serviceIds": [
+        "9536738"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Белая линия живота",
+      "serviceIds": [
+        "9536731"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Плечи",
+      "serviceIds": [
+        "9536751"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Спина, нижняя треть (поясница/крестец)",
+      "serviceIds": [
+        "9536755"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Спина полностью",
+      "serviceIds": [
+        "9536756"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Живот полностью",
+      "serviceIds": [
+        "9536737"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Ореолы",
+      "serviceIds": [
+        "9536748"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Грудь полностью",
+      "serviceIds": [
+        "9536735"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Декольте",
+      "serviceIds": [
+        "9536736"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Бедра полностью",
+      "serviceIds": [
+        "9536730"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Голени с коленями",
+      "serviceIds": [
+        "9536734"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Колени",
+      "serviceIds": [
+        "9536741"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Пальцы ног",
+      "serviceIds": [
+        "9536749"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Стопа с пальцами ног",
+      "serviceIds": [
+        "9536758"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Ноги полностью",
+      "serviceIds": [
+        "9536746"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Классическое бикини",
+      "serviceIds": [
+        "9536740"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Тотальное бикини",
+      "serviceIds": [
+        "9536759"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Межъягодичная зона",
+      "serviceIds": [
+        "9536745"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Ягодицы",
+      "serviceIds": [
+        "9536762"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-laser-epilation",
+      "websiteTitle": "Мужская эпиляция",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-profeccial",
+      "websiteTitle": "Аппаратное очищение и увлажнение кожи ProFacial лицо",
+      "serviceIds": [
+        "32814704"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-profeccial",
+      "websiteTitle": "Аппаратное очищение и увлажнение кожи ProFacial лицо и шея",
+      "serviceIds": [
+        "32814709"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-profeccial",
+      "websiteTitle": "Аппаратное очищение и увлажнение кожи ProFacial лицо, шея и декольте",
+      "serviceIds": [
+        "32814714"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-profeccial",
+      "websiteTitle": "Аппаратное очищение и увлажнение кожи ProFacial шея",
+      "serviceIds": [
+        "32814719"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-profeccial",
+      "websiteTitle": "Аппаратное очищение и увлажнение кожи ProFacial декольте",
+      "serviceIds": [
+        "32814724"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "Лицо",
+      "serviceIds": [
+        "15394106"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "Лицо / Шея / Декольте",
+      "serviceIds": [
+        "15394107"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "Спина",
+      "serviceIds": [
+        "15394108"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "Кисти рук",
+      "serviceIds": [
+        "15394105"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "Heleo4 головы 30 минут",
+      "serviceIds": [
+        "32814729"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "LED терапия",
+      "serviceIds": [
+        "15394104"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-heleo",
+      "websiteTitle": "Курс от 5 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-mikrotokovaya-terapiya",
+      "websiteTitle": "Лимфодренаж, 20 минут (малая зона)",
+      "serviceIds": [
+        "9536781"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mikrotokovaya-terapiya",
+      "websiteTitle": "Лицо, шея лифтинг дренаж микротоки+маска",
+      "serviceIds": [
+        "9536783"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mikrotokovaya-terapiya",
+      "websiteTitle": "Королевский лифтинг микротоки + уход Forlle’d",
+      "serviceIds": [
+        "32843234"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mikrotokovaya-terapiya",
+      "websiteTitle": "Курс от 5 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI EYE",
+      "serviceIds": [
+        "9536662"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI STYLE 1 ml",
+      "serviceIds": [
+        "9536499"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI STYLE 2 ml",
+      "serviceIds": [
+        "9536661"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI SILK 1 ml",
+      "serviceIds": [
+        "9536496"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI SILK 2 ml",
+      "serviceIds": [
+        "9536497"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI STRONG 1 ml",
+      "serviceIds": [
+        "9536498"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "REVI STRONG 2 ml",
+      "serviceIds": [
+        "9536663"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "MESOXANTIN 1,5 ml",
+      "serviceIds": [
+        "9536701",
+        "24271110"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "MESOEYE 1 ml",
+      "serviceIds": [
+        "9536493"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "MESOWHARTON 1,5 ml",
+      "serviceIds": [
+        "9536494"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "MESOSCULPT C71 1ml",
+      "serviceIds": [
+        "9536492",
+        "32843029"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "NOVACUTAN Sbio 2 ml",
+      "serviceIds": [
+        "15394034"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "NOVACUTAN Ybio 2 ml",
+      "serviceIds": [
+        "15394035"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "PROFHILO 2 ml",
+      "serviceIds": [
+        "9536495"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "STYLAGE HYDRA 1 ml",
+      "serviceIds": [],
+      "status": "missing"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "PLINEST FAST 2 ml",
+      "serviceIds": [
+        "17987375"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "PLINEST 2 ml",
+      "serviceIds": [
+        "17987374"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Viscoderm Hydrobooster 1,1 ml",
+      "serviceIds": [
+        "15394042"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "IALEST 2 ml",
+      "serviceIds": [
+        "24270042"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Viscoderm Skinko E 5 ml",
+      "serviceIds": [
+        "17479618"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "NCTF 135HA+, 3 ml",
+      "serviceIds": [],
+      "status": "missing"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Сила волос 2 ml",
+      "serviceIds": [
+        "9536708"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Экзосомальная терапия ExoCoBio ASCEplus Scalp для кожи головы, 20мг",
+      "serviceIds": [
+        "32843094"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Экзосомальная терапия Ersaless Infosys",
+      "serviceIds": [
+        "32843084"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Bellarti Nucleo 7,5 2ml",
+      "serviceIds": [
+        "32842999"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Bellarti Nucleo 20 2ml",
+      "serviceIds": [
+        "32842989"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Bellarti Vita 2ml",
+      "serviceIds": [
+        "32843004"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Bellarti Vita Plus 2 ml",
+      "serviceIds": [
+        "32843009"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Curacen",
+      "serviceIds": [
+        "32843024"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Гиалтокс (мезо+ботокс)",
+      "serviceIds": [
+        "32843069"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Коктейль Slim Body 10 мл",
+      "serviceIds": [
+        "32814634"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Коктейль Худое лицо 2 ml",
+      "serviceIds": [
+        "9536690"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-mezoterapiya-i-biorevitalizaciya",
+      "websiteTitle": "Курс от 3 процедур",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Belotero lips contur, 0,6 ml",
+      "serviceIds": [
+        "9536380"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Belotero Intense, 1 ml",
+      "serviceIds": [
+        "15394022"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Stylage XL 1 ml",
+      "serviceIds": [
+        "32843044"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Stylage M Lidocaine, 1 ml",
+      "serviceIds": [
+        "9536668"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Stylage M, 1 ml",
+      "serviceIds": [
+        "9536667"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Stylage Special lips 1 ml",
+      "serviceIds": [
+        "15394070"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Увлажнение губ Stylage Hydro 1ml",
+      "serviceIds": [
+        "9536665"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Aliaxin Lv, 1 ml",
+      "serviceIds": [
+        "15394021"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Aliaxin EV 1ml",
+      "serviceIds": [
+        "32842984"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Belotero Balance 1 ml",
+      "serviceIds": [
+        "32843014"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Belotero Soft 1ml",
+      "serviceIds": [
+        "32843019"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Stylage L 1 ml",
+      "serviceIds": [
+        "15394039"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Stylage S lidocaine 0,8 ml",
+      "serviceIds": [
+        "32843039"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-konturnaya-plastika",
+      "websiteTitle": "Комплексно от 3 мл (губы не входят)",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Межбровье",
+      "serviceIds": [
+        "15394050"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Лоб + межбровье",
+      "serviceIds": [
+        "15394048"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Уголки глаз «гусиные лапки»",
+      "serviceIds": [
+        "15394054"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Спинка носа",
+      "serviceIds": [
+        "15394053"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "5 в 1: лоб + брови + межбровье + глаза + спинка носа",
+      "serviceIds": [
+        "15394018"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Крылья носа",
+      "serviceIds": [
+        "15394045"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Подбородок",
+      "serviceIds": [
+        "15394051"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Лечение десневой (гингивальной) улыбки",
+      "serviceIds": [
+        "15394046"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Поднятие уголков рта",
+      "serviceIds": [
+        "15394052"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Ботулинотерапия-(кисеты) мышца рта",
+      "serviceIds": [
+        "32843064"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Кончик носа",
+      "serviceIds": [
+        "15394043"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Лифтинг бровей",
+      "serviceIds": [
+        "15394047"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Шея (тяжи платизмы)",
+      "serviceIds": [
+        "15394056"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Коррекция нижней челюсти (бруксизм)",
+      "serviceIds": [
+        "15394044"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Коррекция через 2 недели, 1 ед (миотокс)",
+      "serviceIds": [
+        "15394061"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Коррекция через 2 недели, 1 ед (диспорт)",
+      "serviceIds": [
+        "9536677"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Лечение гипергидроза подмышки/стопы/ладони (1 флакон миотокс или диспорт)",
+      "serviceIds": [
+        "9536689"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-botullinoterapiya",
+      "websiteTitle": "Мужская ботулинотерапия",
+      "serviceIds": [
+        "17987378",
+        "17987379",
+        "17987380",
+        "17987381",
+        "17987382",
+        "17987383",
+        "17987384",
+        "17987385",
+        "17987386",
+        "17987387",
+        "17987388",
+        "17987389",
+        "17987390",
+        "17987391"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-plazmoterapiya-plazmolifting",
+      "websiteTitle": "Лицо",
+      "serviceIds": [
+        "24372813"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-plazmoterapiya-plazmolifting",
+      "websiteTitle": "Шея + декольте",
+      "serviceIds": [
+        "15394064"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-plazmoterapiya-plazmolifting",
+      "websiteTitle": "Волосистая часть головы",
+      "serviceIds": [
+        "15394065"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-plazmoterapiya-plazmolifting",
+      "websiteTitle": "Кисти рук (обе руки)",
+      "serviceIds": [
+        "15394063"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Стройное тело",
+      "serviceIds": [
+        "12496009"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Красивые волосы",
+      "serviceIds": [
+        "12496007"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Золушка с глутатионом",
+      "serviceIds": [
+        "12496006"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Бодрость",
+      "serviceIds": [
+        "12496003"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Антистресс",
+      "serviceIds": [
+        "12496002"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Детокс",
+      "serviceIds": [
+        "12496004"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Железная леди",
+      "serviceIds": [
+        "12496005"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Плацентарная терапия, 2 ml",
+      "serviceIds": [
+        "32814649"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-droppers",
+      "websiteTitle": "Курс из 5 капельниц",
+      "serviceIds": [],
+      "status": "offer"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Коллост micro",
+      "serviceIds": [
+        "15394193"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Коллост micro 5ml + NCTF/Skinko E",
+      "serviceIds": [
+        "24271560"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Коллост micro 5ml + плазма",
+      "serviceIds": [
+        "24271563"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Гель КОЛЛОСТ 15% 1,5 ml",
+      "serviceIds": [
+        "32843209"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Гель КОЛЛОСТ 7% 1 ml",
+      "serviceIds": [
+        "32843214"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Agentcol 003col + 004col 4ml",
+      "serviceIds": [
+        "32843189"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Agentcol 003col 2ml",
+      "serviceIds": [
+        "32843199"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Agentcol 004col 2ml",
+      "serviceIds": [
+        "32843204"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "Linerase",
+      "serviceIds": [
+        "15394187"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-260",
+      "websiteTitle": "NITHYA",
+      "serviceIds": [
+        "15394188"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-285",
+      "websiteTitle": "AestheFill",
+      "serviceIds": [
+        "15394186"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-285",
+      "websiteTitle": "Juvelook",
+      "serviceIds": [
+        "24271554"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-285",
+      "websiteTitle": "Lenisna",
+      "serviceIds": [
+        "24271557"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-285",
+      "websiteTitle": "Sculptra",
+      "serviceIds": [
+        "15394189"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Сила волос 2 ml",
+      "serviceIds": [
+        "9536708"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Экзосомальная терапия ExoCoBio ASCEplus Scalp для кожи головы, 20мг",
+      "serviceIds": [
+        "32843094"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Экзосомальная терапия Ersaless Infosys",
+      "serviceIds": [
+        "32843084"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Bellarti Nucleo 7,5 2ml",
+      "serviceIds": [
+        "32842999"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Плазмотерапия головы",
+      "serviceIds": [
+        "15394065"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Heleo4 головы 30 минут",
+      "serviceIds": [
+        "32814729"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-333",
+      "websiteTitle": "Аргоновая плазма 300 импульсов",
+      "serviceIds": [
+        "32843174"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "BIOREPEEL",
+      "serviceIds": [
+        "9536773"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "PRXT33",
+      "serviceIds": [
+        "9536775"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "PEECH PEEL",
+      "serviceIds": [
+        "15394096"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "Миндальный Enerpeel",
+      "serviceIds": [
+        "15394095"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "Джесснера Enerpeel",
+      "serviceIds": [
+        "15394088"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "Салициловый Enerpeel",
+      "serviceIds": [
+        "15394097"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "Ретиноловый пилинг Tizo (США)",
+      "serviceIds": [],
+      "status": "missing"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "МИЛАЙН: от пигментации, лицо",
+      "serviceIds": [
+        "15394091"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "МИЛАЙН: отбеливание подмышечных впадин",
+      "serviceIds": [
+        "15394090"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosemotologicheskie-pilingi",
+      "websiteTitle": "МИЛАЙН: отбеливание интимных зон",
+      "serviceIds": [
+        "15394089"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-uhodovye-procedury",
+      "websiteTitle": "Экспресс-уход «Sparkling» Forlle’d",
+      "serviceIds": [
+        "25506855"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-uhodovye-procedury",
+      "websiteTitle": "Моделирующая процедура с королевской маской Forlle’d",
+      "serviceIds": [
+        "25506852"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-uhodovye-procedury",
+      "websiteTitle": "Лифтинг-программа объёмного 3D моделирования Forlle’d",
+      "serviceIds": [
+        "25506849"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-uhodovye-procedury",
+      "websiteTitle": "Карбокситерапия Genosys",
+      "serviceIds": [
+        "32843224"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosmetologicheskie-chistki",
+      "websiteTitle": "Комбинированная чистка лица",
+      "serviceIds": [
+        "9536777"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosmetologicheskie-chistki",
+      "websiteTitle": "Комбинированная чистка лица + пилинг",
+      "serviceIds": [
+        "32843229"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-kosmetologicheskie-chistki",
+      "websiteTitle": "Комплексная чистка спины",
+      "serviceIds": [
+        "9536778"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-226",
+      "websiteTitle": "Анестезия 1 зона 30 гр",
+      "serviceIds": [
+        "9536671"
+      ],
+      "status": "matched"
+    },
+    {
+      "section": "price-additional-226",
+      "websiteTitle": "Канюля 1 шт",
+      "serviceIds": [
+        "32843079"
+      ],
+      "status": "matched"
+    }
+  ]
+}

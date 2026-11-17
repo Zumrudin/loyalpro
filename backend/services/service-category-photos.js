@@ -81,7 +81,7 @@ async function remove(salonId,rawCategoryId,rawPhotoId){
 
 async function loadIndex(salonId){
  const [categories,photos,aliases]=await Promise.all([
-  db.any('SELECT id,parent_id,title FROM service_categories WHERE salon_id=$1 ORDER BY id',[salonId]),
+  db.any('SELECT id,parent_id,title FROM service_categories WHERE salon_id=$1 AND NOT archived ORDER BY display_order,id',[salonId]),
   db.any('SELECT id,category_id,file_url,file_name,mime_type,display_order FROM service_category_price_photos WHERE salon_id=$1 ORDER BY display_order,id',[salonId]),
   db.any('SELECT legacy_key,category_id FROM service_category_aliases WHERE salon_id=$1',[salonId]),
  ]);

@@ -35,6 +35,7 @@ async function runMigrations(client) {
     END IF;
   END $$`);
   await client.query(SERVICE_CATALOG_DDL);
+  await client.query(SERVICE_TAXONOMY_DDL);
   await client.query(JOURNAL_FINANCE_DDL);
   await client.query(JOURNAL_LOCAL_DDL);
   await client.query(JOURNAL_PREFS_DDL);
@@ -2780,6 +2781,28 @@ CREATE TABLE IF NOT EXISTS service_catalog (
 );
 CREATE INDEX IF NOT EXISTS service_catalog_category ON service_catalog(salon_id,category_id);
 `;
+const SERVICE_TAXONOMY_DDL = `
+ALTER TABLE service_categories ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE service_categories ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS accounting_category_id INTEGER;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='service_catalog_accounting_category_fk') THEN
+ ALTER TABLE service_catalog ADD CONSTRAINT service_catalog_accounting_category_fk
+ FOREIGN KEY(salon_id,accounting_category_id) REFERENCES service_categories(salon_id,id);
+ END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS service_category_memberships (
+ salon_id INTEGER NOT NULL, service_id INTEGER NOT NULL, category_id INTEGER NOT NULL,
+ PRIMARY KEY(salon_id,service_id,category_id),
+ FOREIGN KEY(salon_id,service_id) REFERENCES service_catalog(salon_id,id),
+ FOREIGN KEY(salon_id,category_id) REFERENCES service_categories(salon_id,id)
+);
+CREATE TABLE IF NOT EXISTS service_taxonomy_runs (
+ id UUID PRIMARY KEY, salon_id INTEGER NOT NULL REFERENCES salons(id),
+ source_key TEXT NOT NULL, snapshot JSONB NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(salon_id,source_key)
+);
+`;
 const SERVICE_CATEGORY_PHOTOS_DDL = `
 CREATE UNIQUE INDEX IF NOT EXISTS service_categories_salon_id_id ON service_categories(salon_id,id);
 CREATE TABLE IF NOT EXISTS service_category_price_photos (
@@ -3486,4 +3509,4 @@ BEGIN
 END $$;
 `;
 
-module.exports = { SERVICE_CATEGORY_PHOTOS_DDL, SERVICE_STAFF_ASSIGNMENTS_DDL, HOME_CARE_TENANT_INTEGRITY_DDL, REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };
+module.exports = { SERVICE_TAXONOMY_DDL, SERVICE_CATEGORY_PHOTOS_DDL, SERVICE_STAFF_ASSIGNMENTS_DDL, HOME_CARE_TENANT_INTEGRITY_DDL, REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };

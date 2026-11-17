@@ -62,3 +62,9 @@ test('base parameters reject coerced boolean/object values and fractional kopeck
  expect(service.parseService({...body,priceMin:null,priceMax:null})).toMatchObject({priceMin:null,priceMax:null});
  expect(service.parseService({...body,priceMin:'0',priceMax:''})).toMatchObject({priceMin:0,priceMax:null});
 });
+
+test('future imports use the visible category alias and retain the original accounting key',async()=>{
+ db.oneOrNone.mockResolvedValue({id:3,yclients_company_id:30});yc.list.mockImplementation(async(_,path)=>path.includes('service_categories')?[{id:10,title:'Cat'}]:[{id:7,title:'Service',category_id:10,duration:1800,price_min:500,price_max:500,staff:[]}]);
+ c.query.mockImplementation(async sql=>({rows:sql.startsWith('SELECT id,yclients_id')?[{id:100,yclients_id:10,canonical_id:200}]:[]}));
+ await service.importYclients(3);const [,args]=c.query.mock.calls.find(([sql])=>sql.startsWith('INSERT INTO service_catalog('));expect(args[2]).toBe(200);expect(args[10]).toBe(100);
+});

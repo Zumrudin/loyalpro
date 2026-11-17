@@ -200,3 +200,5 @@ describe('photoFailureText', () => {
     }
   });
 });
+
+test('merged category sends each original file once while retaining old aliases',()=>{const {buildLocalIndex,resolvePhotos}=require('./services/agent/price-list');const index=buildLocalIndex({categories:[{id:9,title:'New'}],photos:[{id:1,category_id:9,file_url:'/uploads/a.jpg'},{id:2,category_id:9,file_url:'/uploads/a.jpg'}],aliases:[{legacy_key:'k3',category_id:9}]});expect(resolvePhotos('k3',index).photos).toHaveLength(1);});

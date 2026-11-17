@@ -161,7 +161,8 @@ function jrServiceCategoryTree(choices, tile, query, expanded = new Set()) {
     else roots.push(node);
   }
   for (const service of choices) {
-    const node = nodes.get(Number(service.categoryId));
+   for(const categoryId of new Set(service.categoryIds?.length?service.categoryIds:[service.categoryId])) {
+    const node = nodes.get(Number(categoryId));
     const names = [service.title], seen = new Set();
     let ancestor = node;
     while (ancestor && !seen.has(ancestor.id)) {
@@ -170,6 +171,7 @@ function jrServiceCategoryTree(choices, tile, query, expanded = new Set()) {
     }
     if (query && !names.some(name => String(name).toLowerCase().includes(query))) continue;
     (node ? node.services : uncategorized).push(service);
+   }
   }
   const visited = new Set();
   const render = node => {

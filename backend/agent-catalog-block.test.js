@@ -386,3 +386,5 @@ describe('get_service_masters: мужская цена лазерной эпил
     expect(s.staff[0].price_display_men).toBeUndefined();
   });
 });
+
+test('secondary categories participate in category prices without duplicating the service',()=>{const row=svc({category_paths:[['Аппаратная','HELEO4'],['Инъекции','Трихология']]});const ranges=renderPriceRanges([row]).join('\n');expect(ranges).toContain('Аппаратная>HELEO4');expect(ranges).toContain('Инъекции>Трихология');});

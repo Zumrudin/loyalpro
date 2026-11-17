@@ -38,7 +38,7 @@ function adaptCatalog(data, filter) {
   if(!staff.length)return [];
   const allPriced=staff.every(s=>s.price_min!=null);
   const mins=staff.map(s=>s.price_min),maxs=staff.map(s=>s.price_max==null?s.price_min:s.price_max);
-  return [{local_id:Number(service.id),yc_id:externalId,title:service.title,duration_min:numberOrNull(service.duration),price_min:allPriced?Math.min(...mins):null,price_max:allPriced?Math.max(...maxs):null,category_id:service.category_id==null?null:Number(service.category_id),category_path:categoryPath(categories,service.category_id),staff}];
+  return [{local_id:Number(service.id),yc_id:externalId,title:service.title,duration_min:numberOrNull(service.duration),price_min:allPriced?Math.min(...mins):null,price_max:allPriced?Math.max(...maxs):null,category_id:service.category_id==null?null:Number(service.category_id),category_path:categoryPath(categories,service.category_id),category_paths:[...new Set([service.category_id,...(service.secondary_category_ids||[])].filter(x=>x!=null).map(Number))].map(id=>categoryPath(categories,id)),staff}];
  });
 }
 async function loadCatalogServices(salonId) {

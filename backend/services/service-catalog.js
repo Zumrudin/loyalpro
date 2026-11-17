@@ -25,8 +25,8 @@ async function transaction(salonId,fn) {
 }
 async function list(salonId) {
  const [categories,services,staffMembers]=await Promise.all([
- db.any('SELECT id,parent_id,title,yclients_id,yclients_company_id FROM service_categories WHERE salon_id=$1 ORDER BY title,id',[salonId]),
- db.any(`SELECT c.*, ${assignmentProjection}, (c.yclients_company_id::text=s.yclients_company_id::text AND c.yclients_id IS NOT NULL) AS linked
+ db.any('SELECT id,parent_id,title,yclients_id,yclients_company_id FROM service_categories WHERE salon_id=$1 AND NOT archived ORDER BY display_order,title,id',[salonId]),
+ db.any(`SELECT c.*, COALESCE((SELECT jsonb_agg(m.category_id ORDER BY m.category_id) FROM service_category_memberships m WHERE m.salon_id=c.salon_id AND m.service_id=c.id),'[]'::jsonb) AS secondary_category_ids, ${assignmentProjection}, (c.yclients_company_id::text=s.yclients_company_id::text AND c.yclients_id IS NOT NULL) AS linked
  FROM service_catalog c JOIN salons s ON s.id=c.salon_id WHERE c.salon_id=$1 ORDER BY c.title,c.id`,[salonId]),
  db.any('SELECT id,yclients_staff_id,name,is_active FROM staff_members WHERE salon_id=$1 ORDER BY name,id',[salonId])]);
  return {categories,services:decorate(services,staffMembers,[]),staffMembers};
@@ -110,17 +110,17 @@ async function importYclients(salonId) {
  for(const s of services) if(s.category_id&&!sourceCats.has(Number(s.category_id))) sourceCats.set(positiveId(s.category_id),{title:`Категория ${Number(s.category_id)}`,parentId:null});
  const parsed=services.map(s=>({id:positiveId(s.id),title:title(s.title),categoryId:optionalId(s.category_id||null),duration:Math.max(0,Math.min(1440,Math.ceil(Number(s.duration||0)/60))),min:s.price_min==null?null:Number(s.price_min),max:s.price_max==null?null:Number(s.price_max),active:!s.deleted&&!s.is_deleted&&!s.archive,staff:Array.isArray(s.staff)?s.staff:[]}));
  return transaction(salonId,async c=>{
- let addedCategories=0,addedServices=0;const map=new Map(),newCats=new Set();
+ let addedCategories=0,addedServices=0;const map=new Map(),visibleMap=new Map(),newCats=new Set();
  for(const [id,cat] of sourceCats){const out=await c.query(`INSERT INTO service_categories(salon_id,title,yclients_id,yclients_company_id) VALUES($1,$2,$3,$4) ON CONFLICT(salon_id,yclients_company_id,yclients_id) DO NOTHING RETURNING id`,[salonId,cat.title,id,cid]);if(out.rows.length){addedCategories++;newCats.add(id);}}
- const existing=await c.query('SELECT id,yclients_id FROM service_categories WHERE salon_id=$1 AND yclients_company_id=$2',[salonId,cid]);for(const row of existing.rows)map.set(Number(row.yclients_id),Number(row.id));
+ const existing=await c.query(`SELECT id,yclients_id,(SELECT a.category_id FROM service_category_aliases a JOIN service_categories target ON target.salon_id=a.salon_id AND target.id=a.category_id AND NOT target.archived WHERE a.salon_id=service_categories.salon_id AND a.legacy_key='k'||service_categories.id::text) AS canonical_id FROM service_categories WHERE salon_id=$1 AND yclients_company_id=$2`,[salonId,cid]);for(const row of existing.rows){map.set(Number(row.yclients_id),Number(row.id));visibleMap.set(Number(row.yclients_id),Number(row.canonical_id||row.id));}
  for(const id of newCats){const cat=sourceCats.get(id);if(cat.parentId){checkParent([...sourceCats].map(([id,v])=>({id,parent_id:v.parentId})),id,cat.parentId);await c.query('UPDATE service_categories SET parent_id=$3 WHERE salon_id=$1 AND id=$2',[salonId,map.get(id),map.get(cat.parentId)]);}}
- for(const s of parsed){const out=await c.query(`INSERT INTO service_catalog(salon_id,title,category_id,duration,price_min,price_max,active,yclients_id,yclients_company_id,economics_yc_id,staff) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$8,$10) ON CONFLICT(salon_id,yclients_company_id,yclients_id) DO NOTHING RETURNING id`,[salonId,s.title,map.get(s.categoryId)||null,s.duration,s.min,s.max===null||s.min===null?null:Math.max(s.min,s.max),s.active,s.id,cid,JSON.stringify(s.staff)]);addedServices+=out.rows.length;}
+ for(const s of parsed){const out=await c.query(`INSERT INTO service_catalog(salon_id,title,category_id,duration,price_min,price_max,active,yclients_id,yclients_company_id,economics_yc_id,staff,accounting_category_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$8,$10,$11) ON CONFLICT(salon_id,yclients_company_id,yclients_id) DO NOTHING RETURNING id`,[salonId,s.title,visibleMap.get(s.categoryId)||null,s.duration,s.min,s.max===null||s.min===null?null:Math.max(s.min,s.max),s.active,s.id,cid,JSON.stringify(s.staff),map.get(s.categoryId)||null]);addedServices+=out.rows.length;}
  return {addedCategories,addedServices};
  });
 }
 function journalService(s) {
  const staff=Array.isArray(s.staff)?s.staff.filter(x=>x!=null&&Number(x.id||x)>0):[];
- return {id:Number(s.id),yclientsId:Number(s.yclients_id),title:s.title,categoryId:s.category_id,duration:s.duration,priceMin:s.price_min==null?null:Number(s.price_min),priceMax:s.price_max==null?null:Number(s.price_max),staffIds:staff.map(x=>Number(x.id||x)),staffDetails:staff.map(x=>({id:Number(x.id||x),duration:Number(x.seance_length)/60||s.duration,priceMin:x.price?.min==null?(s.price_min==null?null:Number(s.price_min)):Number(x.price.min),priceMax:x.price?.min==null?(s.price_max==null?null:Number(s.price_max)):Math.max(Number(x.price.max??x.price.min),Number(x.price.min))}))};
+ return {id:Number(s.id),yclientsId:Number(s.yclients_id),title:s.title,categoryId:s.category_id,categoryIds:[...new Set([s.category_id,...(s.secondary_category_ids||[])].filter(x=>x!=null).map(Number))],duration:s.duration,priceMin:s.price_min==null?null:Number(s.price_min),priceMax:s.price_max==null?null:Number(s.price_max),staffIds:staff.map(x=>Number(x.id||x)),staffDetails:staff.map(x=>({id:Number(x.id||x),duration:Number(x.seance_length)/60||s.duration,priceMin:x.price?.min==null?(s.price_min==null?null:Number(s.price_min)):Number(x.price.min),priceMax:x.price?.min==null?(s.price_max==null?null:Number(s.price_max)):Math.max(Number(x.price.max??x.price.min),Number(x.price.min))}))};
 }
 async function forJournal(salonId) {const data=await list(salonId);return {categories:data.categories,services:data.services.filter(s=>s.active&&s.linked).map(journalService)};}
 async function resolve(salon,ids) {

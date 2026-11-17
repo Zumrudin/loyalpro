@@ -135,13 +135,15 @@ function renderPriceRanges(services) {
     // склеивались в одну строку промпта. Тот же принцип, что в male-services:
     // направление сравнивается ПОЛНЫМ category_path. Печатается тот же путь —
     // в том же формате «направление>подкатегория», что колонка каталога.
-    const path = (s.category_path || []).map(c => cell(c, 60)).filter(Boolean);
+    for (const categoryPath of (s.category_paths?.length ? s.category_paths : [s.category_path || []])) {
+    const path = categoryPath.map(c => cell(c, 60)).filter(Boolean);
     for (let i = 0; i < path.length; i++) {
       const nodeKey = path.slice(0, i + 1).join('>');
       const node = nodes.get(nodeKey) || { f: null, m: null, x: null };
       widen(node, key, b);
       if (xb) widen(node, 'x', xb);
       nodes.set(nodeKey, node);
+    }
     }
   }
   // Простое строковое сравнение, НЕ localeCompare: блок обязан быть
@@ -181,7 +183,7 @@ function renderCatalogBlock(services) {
         cell(s.title, 120),
         s.duration_min || '',
         unitPrice ? 'инд.' : withMalePrice(fmtPrice(s.price_min, s.price_max), s.price_min, s.price_max, maleMarkup),
-        (s.category_path || []).map(c => cell(c, 60)).join('>'),
+        (s.category_paths?.length?s.category_paths:[s.category_path||[]]).map(path=>path.map(c=>cell(c,60)).join('>')).join(' / '),
         fmtStaffCell(s.staff, { hidePrices: unitPrice, maleMarkup }),
       ].join('|');
     });

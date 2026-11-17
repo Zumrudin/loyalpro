@@ -542,6 +542,7 @@ async function getServicesForAdmin(salonId) {
     let node=nodes.get(Number(s.category_id));
     if(!node){if(!uncategorized){uncategorized={id:null,title:'Без категории',services:[],subcategories:[]};roots.push(uncategorized);}node=uncategorized;}
     node.services.push(service);
+    for(const id of new Set(s.secondary_category_ids||[])){const other=nodes.get(Number(id));if(other&&other!==node)other.services.push(service);}
   }
   return {serviceMode:filter.mode,categories:roots,source:'service_catalog'};
 }

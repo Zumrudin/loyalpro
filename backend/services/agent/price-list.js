@@ -42,7 +42,7 @@ function buildLocalIndex({categories,photos,aliases,priceListUrl}={}){
  const nodes=new Map();
  for(const c of categories||[]){if(c==null||c.id==null)continue;const key=localKey(c.id);nodes.set(key,{key,title:cell(c.title,80),parentKey:c.parent_id==null?null:localKey(c.parent_id),path:null,photos:[]});}
  for(const node of nodes.values()){const chain=[],seen=new Set();let cur=node;while(cur&&!seen.has(cur.key)){seen.add(cur.key);chain.push(cur.title);cur=cur.parentKey?nodes.get(cur.parentKey):null;}node.path=chain.reverse();}
- for(const p of photos||[]){const node=nodes.get(localKey(p.category_id));if(node)node.photos.push({id:p.id,fileUrl:p.file_url,fileName:p.file_name,mimeType:p.mime_type});}
+ for(const p of photos||[]){const node=nodes.get(localKey(p.category_id));if(node&&!node.photos.some(photo=>photo.fileUrl===p.file_url))node.photos.push({id:p.id,fileUrl:p.file_url,fileName:p.file_name,mimeType:p.mime_type});}
  const aliasMap=new Map();for(const a of aliases||[]){const target=localKey(a.category_id);if(nodes.has(target))aliasMap.set(String(a.legacy_key),target);}
  return {nodes,aliases:aliasMap,priceListUrl:priceListUrl||null};
 }

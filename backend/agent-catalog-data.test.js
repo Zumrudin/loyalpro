@@ -36,7 +36,7 @@ describe('canonical Mila catalog adapter', () => {
     expect(adaptCatalog(fixture(), filter())).toEqual([{
       local_id: 7, yc_id: 77, title: 'Процедура', duration_min: 60,
       price_min: 0, price_max: 2000, category_id: 2,
-      category_path: ['Косметология', 'Инъекции'],
+      category_path: ['Косметология', 'Инъекции'], category_paths: [['Косметология', 'Инъекции']],
       staff: [
         { yc_id: 501, name: 'Анна', price_min: 0, price_max: 0, duration_min: 30 },
         { yc_id: 502, name: 'Пери', price_min: 1000, price_max: 2000, duration_min: 90 },
@@ -96,3 +96,5 @@ describe('canonical Mila catalog adapter', () => {
     await expect(loadCatalogServices(4)).rejects.toThrow('filter unavailable');
   });
 });
+
+test('additional membership exposes both paths without duplicating service or staff',()=>{const data=fixture();data.services[0].secondary_category_ids=[1,2];const result=adaptCatalog(data,filter());expect(result).toHaveLength(1);expect(result[0].category_paths).toEqual([['Косметология','Инъекции'],['Косметология']]);expect(result[0].staff).toHaveLength(2);});
