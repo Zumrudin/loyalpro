@@ -1,6 +1,6 @@
 # Исправление независимого auth/tenant аудита
 
-Статус: реализация принята и выложена на dev 17.11.2026, source `0d3c6b8`. Повторная приёмка: 343 candidate tests, 16 live checks, browser MCP оба чата PASS; production не менялся. Детали и backup: `docs/security/2026-11-17-auth-tenant-rollout.md`. Нижние формулировки «ещё не выполнялись» относятся к моменту локальной приёмки до разрешения dev rollout.
+Статус: реализация принята и выложена на dev 17.11.2026, source `0d3c6b8`. Повторная приёмка: 343 candidate tests, 16 live checks, browser MCP оба чата PASS; production затем обновлён до `ab874f4` 17.11 05:53:44 UTC: 352 candidate tests, tunnel/HTTPS/browser smoke PASS. Детали и backup: `docs/security/2026-11-17-auth-tenant-rollout.md`. Нижние формулировки «ещё не выполнялись» относятся к моменту локальной приёмки до разрешения dev rollout.
 
 Исходный отчёт: `docs/security/2026-11-17-independent-auth-tenant-audit.md`.
 Объём: A1–A5. Руководитель принимает архитектурные решения и проверяет каждый diff; три младших исполнителя работают в отдельных файлах. Никаких реальных отправок, production-данных или выкладки в рамках локальной реализации.

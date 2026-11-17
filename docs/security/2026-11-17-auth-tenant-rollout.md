@@ -1,6 +1,18 @@
 # Выкладка исправлений A1–A5
 
-Dev-выкладка выполнена; результат ниже. Production остаётся на прежнем выпуске `3c8798b`.
+Dev и production: исправления A1–A5 выложены. Production дополнительно включает проверенный private tunnel transport `ab874f4`.
+
+## Выполнено на production — 17.11.2026
+
+- 05:53:44.983599 UTC: `/srv/loyalpro/current` → `/srv/loyalpro/releases/auth-tenant-20261117`, source `ab874f4` из main. PM2 от loyalpro, фактический cwd проверен, Node22.22.1, backend loopback3001. Предыдущий release `security-completion-20261117` сохранён.
+- Backup `/srv/loyalpro-backups/pre-auth-tenant-20261117`: dump loyalpro 13,374,997B, pg_restore --list 1303 entries; приватная env, nginx, ecosystem, PM2 dump и metadata. Секреты и shared data/logs/uploads сохранены; добавлен только GATEWAY_FILES_ORIGIN.
+- Production PostgreSQL MCP: четыре агрегата home-care audit0 до/после; три составных FK установлены и VALIDATED одной транзакцией за31ms с lock/statement5/30s. Последующий read-only MCP подтвердил validated/deferrable=true для всех трёх. Рабочие строки не исправлялись и не удалялись.
+- Точный чистый candidate до env: npm ci; 19 focused Jest suites /352 tests PASS; npm prune --omit=dev. Все2235 tracked backend/frontend files совпали по SHA256 с sourcecommit. Независимое ревью loopback transport одобрено; отдельный повтор20tests PASS.
+- Защищённый source-service получил синтетический файл через фактический SSH tunnel production→dev. Файл и созданный пустой каталог удалены; production DB fixtures/пользователи не создавались. Эта проверка подтверждает транспорт, а проверка auth/tenant/role обеспечена candidate tests и предыдущими dev live checks, не заявляется как авторизованный production-user E2E.
+- Nginx: публичный proxy gateway uploads заменён exact/^~404, `nginx -t` и reload успешны; private loopback3103 relay сохранён. HTTPS: index200, anonymous clients/attachment/SSE/mobile profile401; raw/encoded/dot-path и IPvhost404. Index/chat/journal-chat byte-match; strict CSP сохранён.
+- Browser MCP на реальном production: login200, password input, attachment anonymous401, pageerrors0; ожидаемая network console запись401. Без реального входа/чтения пациентских данных.
+- После переключения PM2 online, restart counter41 стабилен (накопительный счётчик, не число аварий этого release); новых ERROR/fatal/MaxListeners0. Один прежний dependency DeprecationWarning. Полный Jest, реальный OTP, real-user password reset, пациентские отправки/бонусы/записи и полный authenticated production UI E2E не запускались.
+- Private helper artifacts: local `/tmp/loyalpro-auth-tenant-prod/`, remote `/tmp/auth-tenant-*`; runtime rollback к прежнему release сохраняет закрытый nginx gateway prefix и additive FK. Backup БД автоматически не восстанавливать. Dev остаётся на source0d3c6b8 с локальным source path; дополнительный production tunnel transport покрыт отдельными тестами.
 
 ## Выполнено на dev — 17.11.2026
 
