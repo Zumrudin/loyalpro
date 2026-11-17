@@ -24,6 +24,19 @@ function invalidatePriceIndex(salonId) {
 }
 
 const adminOnly = [auth, requireRole('owner', 'admin')];
+// Cached old clients must not alter migrated trees or remove files shared by the new catalog.
+router.use(['/service-subcategories','/service-placements','/price-photos'], adminOnly, async(req,res,next)=>{
+  if(['GET','HEAD','OPTIONS'].includes(req.method))return next();
+  try {
+    // Hold the same tenant lock through the legacy response. A transfer cannot
+    // pass its fingerprint check while a previously admitted legacy write runs.
+    await require('../services/service-catalog').transaction(req.user.salonId,async c=>{
+      const migrated=(await c.query("SELECT id FROM service_photo_transfer_runs WHERE salon_id=$1 AND status='applied'",[req.user.salonId])).rows[0];
+      if(migrated)return res.status(409).json({error:'Категории и картинки прайса перенесены в Настройки → Услуги. Обновите страницу.'});
+      await new Promise(resolve=>{res.once('finish',resolve);res.once('close',resolve);next();});
+    });
+  } catch (_) {if(!res.headersSent)res.status(503).json({error:'Не удалось проверить каталог. Повторите позже.'});}
+});
 router.use('/model', require('./agent-model'));
 
 // ── multer storage для фото прайс-листа (имя файла собираем сами) ─────────
@@ -53,7 +66,9 @@ router.get('/settings', adminOnly, async (req, res) => {
 // PUT /api/agent/settings { enabled, mode, scheduleEnabled, scheduleStart, scheduleEnd }
 router.put('/settings', adminOnly, async (req, res) => {
   try {
-    res.json(await settings.updateSettings(req.user.salonId, req.body || {}));
+    const result=await settings.updateSettings(req.user.salonId, req.body || {});
+    invalidatePriceIndex(req.user.salonId);
+    res.json(result);
   } catch (e) {
     if (e.code === 'BAD_TIME')
       return res.status(400).json({ error: 'Некорректное время расписания' });

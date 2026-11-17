@@ -1,3 +1,5 @@
+jest.mock('./services/economics/catalog', () => ({ loadCatalog: jest.fn() }));
+const { loadCatalog } = require('./services/economics/catalog');
 'use strict';
 // Роутер тянет store → db, report → yclients, логгер, middleware/auth: всё мокаем.
 jest.mock('./db', () => ({ db: { one: jest.fn(), oneOrNone: jest.fn(), query: jest.fn(), any: jest.fn() }, pool: {} }));
@@ -367,9 +369,8 @@ describe('второе ревью', () => {
     expect(r.status).toBe(400);
     expect(store.clearServiceTechCard).not.toHaveBeenCalled();
   });
-  test('п.7/9: /dictionaries — management-каталог + staff салона + услуги из записей; сбой YClients → degraded', async () => {
-    yc.ycGetServiceMeta.mockResolvedValue({ titleByService: new Map([['10', 'Чистка'], ['11', 'Пилинг']]), categoryByService: new Map([['10', 100], ['11', 101]]) });
-    yc.ycGetServiceCatalog.mockResolvedValue({ priced: [], categories: [{ id: 100, title: 'Косметология' }] });
+  test('п.7/9: /dictionaries — локальный каталог + staff салона + исторические услуги; пустой каталог корректен', async () => {
+    loadCatalog.mockResolvedValue({ meta: { titleByService: new Map([['10', 'Чистка'], ['11', 'Пилинг']]), categoryByService: new Map([['10', 100], ['11', 101]]) }, catalog: { categories: [{ id: 100, title: 'Косметология' }] }, unlinkedServices: [] });
     store.listDictionaryStaff.mockResolvedValue([{ id: 5, name: 'Юлия', is_active: true }]);
     store.listRecentServices.mockResolvedValue([{ id: 12, title: 'Старая услуга', category_id: null }, { id: 10, title: 'дубль', category_id: 100 }]);
     const r = await call('GET', '/dictionaries');
@@ -382,11 +383,13 @@ describe('второе ревью', () => {
     expect(r.body.categories.map(c => c.id).sort()).toEqual([100, 101]);
     expect(r.body.staff).toEqual([{ id: 5, name: 'Юлия', is_active: true }]);
 
-    yc.ycGetServiceMeta.mockResolvedValue({ titleByService: new Map(), categoryByService: new Map() });
-    yc.ycGetServiceCatalog.mockResolvedValue({ priced: [], categories: [] });
+    expect(loadCatalog).toHaveBeenCalledWith(1);
+    expect(yc.ycGetServiceMeta).not.toHaveBeenCalled();
+    expect(yc.ycGetServiceCatalog).not.toHaveBeenCalled();
+    loadCatalog.mockResolvedValue({ meta: {}, catalog: {}, unlinkedServices: [] });
     const d = await call('GET', '/dictionaries');
     expect(d.status).toBe(200);
-    expect(d.body.degraded).toBe(true);
+    expect(d.body.degraded).toBe(false);
     expect(d.body.services.map(s => s.id).sort()).toEqual([10, 12]); // из записей — остаются
   });
 });

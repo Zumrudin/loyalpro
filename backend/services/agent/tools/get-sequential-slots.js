@@ -268,7 +268,7 @@ async function run(salonId, input, ctx = {}) {
       if (busy.length) ranges = eq.subtractRanges(ranges, busy);
       entries.push({
         ranges,
-        durationMin: eqContext.durationMin(eqCtx, svc.yc_id) || DEFAULT_DURATION_MIN,
+        durationMin: svc.performers.find(p => String(p.yc_id) === String(staff.yc_id))?.duration_min || eqContext.durationMin(eqCtx, svc.yc_id) || DEFAULT_DURATION_MIN,
         staff, svc,
       });
     }

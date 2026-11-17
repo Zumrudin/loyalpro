@@ -178,18 +178,24 @@ async function availability(salon, draft, record, src = sources.live(salon)) {
   if (local && local.some(s => !localCatalog.journalService(s).staffIds.includes(draft.staffId))) m.fail('Услуга не назначена сотруднику во внутреннем каталоге.',409);
   const ids = record ? (record.services || []).map(s => Number(s.id)) : local ? local.map(s => Number(s.yclients_id)) : draft.serviceIds;
   if (!ids?.length) m.fail('В записи нет услуг.', 409);
+  if (!local && (!record || Number(record.staff_id) !== draft.staffId)) {
+    await require('./service-assignments').requireAssigned(salon.id, ids, draft.staffId);
+  }
   const selected = ids.map(id => services.find(s => Number(s.id) === id));
+  const policy = require('../service-catalog-policy');
+  const managed = !local && (!record || Number(record.staff_id) !== draft.staffId) ? await policy.load(salon.id) : new Map();
+  const effective = ids.map(id => policy.pair(managed, id, draft.staffId));
   if (selected.some(s => !s || s.deleted || s.is_deleted || s.archive)) m.fail('Услуга недоступна.', 409);
   // Staff journal uses the full management catalog (including services hidden
   // from online booking). Unknown assignments fail closed.
   if (selected.some(s => !Array.isArray(s.staff) || !s.staff.some(x => Number(x.id || x) === draft.staffId))) {
     m.fail('Не подтверждена доступность услуг у сотрудника. Проверьте настройки YClients.', 409);
   }
-  const computed = record ? Number(record.seance_length) / 60 : local ? local.reduce((sum,s) => { const info=localCatalog.journalService(s);return sum+(info.staffDetails.find(x=>x.id===draft.staffId)?.duration || info.duration)*(draft.lines?.find(l=>l.serviceId===Number(s.id))?.quantity || draft.quantities?.[s.id] || 1); },0) : selected.reduce((total, s) => {
+  const computed = record ? Number(record.seance_length) / 60 : local ? local.reduce((sum,s) => { const info=localCatalog.journalService(s);return sum+(info.staffDetails.find(x=>x.id===draft.staffId)?.duration || info.duration)*(draft.lines?.find(l=>l.serviceId===Number(s.id))?.quantity || draft.quantities?.[s.id] || 1); },0) : selected.reduce((total, s, index) => {
     const specific = (s.staff || []).find(x => Number(x.id) === draft.staffId);
-    const seconds = Number(specific?.seance_length || s.duration);
+    const seconds = effective[index] ? effective[index].duration * 60 : Number(specific?.seance_length || s.duration);
     if (!(seconds > 0)) m.fail('Для услуги не задана длительность.', 409);
-    return total + seconds / 60;
+    return total + seconds / 60 * (draft.lines?.find(line => line.serviceId === Number(s.id))?.quantity || draft.quantities?.[s.id] || 1);
   }, 0);
   // An explicit length from the card / resize handle (12.11.2026) wins.
   const override = Number(draft.durationOverride);
@@ -205,7 +211,12 @@ async function availability(salon, draft, record, src = sources.live(salon)) {
     resourceIds.length ? src.resources() : Promise.resolve([]),
   ]);
   for (const r of records) r._journalResourceIds = (r.services || []).flatMap(s => services.find(x => Number(x.id) === Number(s.id))?.resources || []);
-  return { duration, ...(local ? {servicePayload:local.map(s => {const info=localCatalog.journalService(s);const price=info.staffDetails.find(x=>x.id===draft.staffId)?.priceMin ?? info.priceMin;const line=draft.lines?.find(l=>l.serviceId===Number(s.id));return line?{id:Number(s.yclients_id),amount:line.quantity,cost_per_unit:line.unitPrice,first_cost:line.gross,discount:line.discount,cost:line.total}:{id:Number(s.yclients_id),...(price==null?{}:{cost:price})};})}:{}), slots: m.slotsFor({ ...draft, duration, breakMinutes, schedule, records, resourceIds, resources, excludeId: record?.id }) };
+  return { duration, ...(local ? {servicePayload:local.map(s => {const info=localCatalog.journalService(s);const price=info.staffDetails.find(x=>x.id===draft.staffId)?.priceMin ?? info.priceMin;const line=draft.lines?.find(l=>l.serviceId===Number(s.id));return line?{id:Number(s.yclients_id),amount:line.quantity,cost_per_unit:line.unitPrice,first_cost:line.gross,discount:line.discount,cost:line.total}:{id:Number(s.yclients_id),...(price==null?{}:{cost:price})};})}: effective.some(Boolean) ? { servicePayload: ids.map((id, index) => {
+    const line = draft.lines?.find(l => l.serviceId === id);
+    if (line) return { id, amount: line.quantity, cost_per_unit: line.unitPrice, first_cost: line.gross, discount: line.discount, cost: line.total };
+    const price = effective[index]?.priceMin;
+    return { id, ...(price == null ? {} : { cost: price }) };
+  }) } : {}), slots: m.slotsFor({ ...draft, duration, breakMinutes, schedule, records, resourceIds, resources, excludeId: record?.id }) };
 }
 async function slots(salonId, draft) {
   const salon = await salonFor(salonId);

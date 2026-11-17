@@ -1,4 +1,8 @@
 'use strict';
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
+jest.mock('./services/service-catalog', () => ({forJournal: jest.fn(async () => ({services:[{yclientsId:8,staffIds:[5]}]}))}));
 jest.mock('./config',()=>({JWT_SECRET:'synthetic'}));
 const {parse,patch}=require('./services/journal/record-edit');
 const m=require('./services/journal/model');
@@ -167,4 +171,31 @@ describe('duration-only shortening through the lower edge (15.11.2026)', () => {
     await expect(patch({}, { ...record, deleted: true, paid_full: true }, { seanceLength: 30 }, src, jest.fn(), true))
       .rejects.toThrow('Запись удалена');
   });
+});
+
+
+describe('managed assignments on existing visit edits', () => {
+ const policy = require('./services/service-catalog-policy');
+ afterEach(() => policy.load.mockResolvedValue(new Map()));
+ test('new service without local assignment rejected even after visit started', async () => {
+  policy.load.mockResolvedValue(new Map([['8', {active: true, staffDetails: []}]]));
+  await expect(patch({id:3}, {...record, datetime:'2020-01-01T10:00:00+03:00'}, {lines:[line]}, src, jest.fn())).rejects.toThrow(/назначена/);
+ });
+ test('retained line remains editable after assignment is removed', async () => {
+  policy.load.mockResolvedValue(new Map([['7', {active: false, staffDetails: []}]]));
+  const out = await patch({id:3}, record, {lines:[{...line, serviceId:7, unitPrice:80}]}, src, jest.fn());
+  expect(out.services[0]).toMatchObject({id:7, cost:80});
+ });
+});
+
+test('an upstream-only service cannot be added to a past visit outside the settings catalog', async () => {
+ require('./services/service-catalog').forJournal.mockResolvedValueOnce({services:[]});
+ await expect(patch({id:3},{...record,datetime:'2020-04-01T10:00:00+03:00'},{lines:[line]},src,jest.fn())).rejects.toMatchObject({code:'service_assignment'});
+});
+test('editing a retained historical line does not require current catalog eligibility', async () => {
+ const catalog = require('./services/service-catalog');
+ catalog.forJournal.mockClear();
+ const out = await patch({id:3},record,{lines:[{...line,serviceId:7}]},src,jest.fn());
+ expect(out.services[0].id).toBe(7);
+ expect(catalog.forJournal).not.toHaveBeenCalled();
 });

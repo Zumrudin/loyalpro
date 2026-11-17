@@ -124,12 +124,12 @@ test('кап символов: длинный журнал усыхает, write
   expect(lines.join('\n')).toMatch(/record_id=9/);
 });
 
-test('экстрактор цен: get_service_masters рендерит мастеров с price_display', () => {
-  const rows = [ev({ tool: 'get_service_masters', result: { services: [{ title: 'Комплекс 5в1', staff: [{ name: 'Юлия', price_display: '19 000 ₽' }, { name: 'Пери', price_display: '23 000 ₽' }] }] } })];
+test('get_service_masters сохраняет исполнителей, но не волатильные цены', () => {
+  const rows = [ev({ tool: 'get_service_masters', result: { services: [{ yc_id: 7, title: 'Комплекс 5в1', staff: [{ yc_id: 1, name: 'Юлия', price_display: '19 000 ₽' }, { yc_id: 2, name: 'Пери', price_display: '23 000 ₽' }] }] } })];
   const line = renderMemory(rows, { nowMs: NOW }).lines[0];
   expect(line).toMatch(/«Комплекс 5в1»/);
-  expect(line).toMatch(/Юлия 19 000 ₽/);
-  expect(line).toMatch(/Пери 23 000 ₽/);
+  expect(line).toMatch(/Юлия \(staff_yc_id=1\)/);
+  expect(line).not.toMatch(/19 000|23 000|price/);
 });
 
 test('экстрактор book_chain: частичная цепочка помечается', () => {
@@ -502,8 +502,10 @@ test('needs_phone — единственный error-вызов, который 
 
 // 08.11.2026: мужская цена лазерной эпиляции (стандартная +30 %) из get_service_masters
 // живёт в памяти рядом с обычной — иначе следующий ход назвал бы мужчине женскую.
-test('экстрактор цен: мужская цена price_display_men попадает в журнал', () => {
+test('мужская цена price_display_men также не попадает в межходовую память', () => {
   const rows = [ev({ tool: 'get_service_masters', result: { services: [{ title: 'Спина полностью',
     staff: [{ name: 'Юлия', price_display: '3500 ₽', price_display_men: '4550 ₽' }] }] } })];
-  expect(renderMemory(rows, { nowMs: NOW }).lines[0]).toMatch(/Юлия 3500 ₽ \(мужчине 4550 ₽\)/);
+  const line = renderMemory(rows, { nowMs: NOW }).lines[0];
+  expect(line).toMatch(/Юлия/);
+  expect(line).not.toMatch(/3500|4550/);
 });

@@ -1,5 +1,10 @@
 'use strict';
 
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
+
 // Регресс на баг: агент предлагал свободное время мастера, который НЕ выполняет
 // запрошенную услугу (клиент назвал мастера по имени → модель брала его yc_id из
 // list_staff, минуя поле staff услуги; график/кресло мастера слепы к тому, делает
@@ -109,5 +114,27 @@ describe('get_parallel_slots — предпроверка по каждому г
       ],
     }, { nowMs: NOON });
     expect(out.staff_mismatch).toBeUndefined();
+  });
+});
+
+describe('managed staff duration and removal', () => {
+  const policy = require('./services/service-catalog-policy');
+  afterEach(() => policy.load.mockResolvedValue(new Map()));
+  test('local 45 minute duration replaces 60 minute upstream slots and fits full interval', async () => {
+    policy.load.mockResolvedValue(new Map([['900', {active:true,staffIds:[11],staffDetails:[{id:11,duration:45,priceMin:0}]}]]));
+    ycGetStaffSeances.mockResolvedValue(Array.from({length:12},(_,i)=>({time:`16:${String(i*5).padStart(2,'0')}`,is_free:true})));
+    const out = await slots.run(1, {staff_yc_id:11,service_yc_id:900,date:'2026-07-23'}, {nowMs:NOON});
+    expect(out.slots.length).toBeGreaterThan(0);
+    expect(out.slots.every(s => s.seance_length === 2700)).toBe(true);
+    expect(out.slots.some(s => s.time === '16:30')).toBe(false);
+    expect(ycGetBookTimes).not.toHaveBeenCalled();
+  });
+  test('removed assignment never falls open when catalog API fails', async () => {
+    policy.load.mockResolvedValue(new Map([['900', {active:true,staffIds:[],staffDetails:[]}]]));
+    listServices.run.mockRejectedValue(new Error('synthetic outage'));
+    const out = await slots.run(1, {staff_yc_id:11,service_yc_id:900,date:'2026-07-23'}, {nowMs:NOON});
+    expect(out.staff_mismatch).toBe(true);
+    expect(ycGetBookTimes).not.toHaveBeenCalled();
+    expect(ycGetStaffSeances).not.toHaveBeenCalled();
   });
 });

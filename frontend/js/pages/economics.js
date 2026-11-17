@@ -7,6 +7,7 @@ let _eco = { tab: 'services', from: null, to: null, preset: 'month', report: nul
 
 function ecoEnsurePeriod() { if (!_eco.from) { const p = ecoPeriodPreset('month', ecoTodayMsk()); _eco.from = p.from; _eco.to = p.to; } }
 function loadEconomics() {
+  _eco.dicts = null; _eco.report = null;
   ecoEnsurePeriod();
   ecoRenderPeriod();
   ecoSwitchTab(_eco.tab || 'services');
@@ -40,15 +41,12 @@ function ecoApplyRange() {
   _eco.from = f <= t ? f : t; _eco.to = f <= t ? t : f; _eco.report = null; ecoRenderPeriod(); ecoSwitchTab(_eco.tab);
 }
 function ecoQs() { return `from=${_eco.from}&to=${_eco.to}`; }
-// Свой справочник: услуги из management-каталога YClients (все 300+, а не 4
-// онлайн-записываемых), сотрудники салона, услуги из записей за 12 мес.
-// Неполный ответ (degraded/пусто — YClients не ответил) не кэшируется: следующий
-// заход на вкладку спросит снова, а не будет жить с пустыми списками до F5.
+// Общий справочник из настроек; исторические строки сохранены для отчётов.
 async function ecoDicts() {
   if (_eco.dicts) return _eco.dicts;
   const d = await api('GET', '/api/economics/dictionaries');
   if (ecoDictsCacheable(d)) _eco.dicts = d;
-  else if (d && d.degraded) notify('Каталог услуг YClients не ответил — список услуг неполный', 'err');
+  else if (d && d.degraded) notify('Не удалось полностью загрузить справочник услуг из настроек', 'err');
   return d;
 }
 function ecoDictLabel(i) { return (i.name || i.title || String(i.id)) + (i.is_active === false ? ' (не работает)' : '') + (i.in_catalog === false ? ' (нет в каталоге)' : ''); }

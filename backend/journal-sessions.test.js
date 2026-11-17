@@ -10,7 +10,7 @@ jest.mock('./services/journal/yclients', () => {
 });
 jest.mock('./services/journal/index', () => ({ availability: jest.fn() }));
 jest.mock('./services/journal/sources', () => ({ local: jest.fn(() => ({ kind: 'local', services: jest.fn(async () => []) })), forSalon: jest.fn(async () => ({ kind: 'local', services: jest.fn(async () => []) })), live: jest.fn(() => { throw new Error('live source'); }) }));
-jest.mock('./services/service-catalog', () => ({ resolve: jest.fn() }));
+jest.mock('./services/service-catalog', () => ({ resolve: jest.fn(), list: jest.fn(async()=>({services:[]})) }));
 jest.mock('./services/journal/reference-cache', () => ({ getReference: jest.fn(), getBonusPercent: jest.fn() }));
 const { db, pool, withTransaction } = require('./db');
 const yc = require('./services/journal/yclients');

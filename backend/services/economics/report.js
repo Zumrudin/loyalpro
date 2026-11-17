@@ -1,15 +1,14 @@
 'use strict';
 // Склейка отчёта: store.loadPeriod → calc → aggregate. Кэш 60 с на ключ
 // salon+from+to: один отчёт открывают несколько раз подряд (вкладки, детализация).
-// Отчёт никогда не падает из-за отсутствия справочников: пустые правила/бюджет/
-// аппараты и недоступный каталог YClients дают нули и флаги, не ошибку.
+// Пустые правила/бюджет/аппараты дают нули и флаги. Каталог читается локально.
 const store = require('./store');
 const calc = require('./calc');
 const { unitPriceAsOf, mskDay } = require('./price');
 const { pickTechCard, suggestLinks } = require('./tech-cards');
 const { periodFixedCosts, equipmentPeriodCost, daysInMonth, r2 } = require('./allocation');
 const sync = require('./sync');
-const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
+const { loadCatalog } = require('./catalog');
 const { createLogger } = require('../../logger');
 const logger = createLogger('EconomicsReport');
 
@@ -38,28 +37,11 @@ function invalidate(salonId) {
   for (const k of [..._cache.keys()]) if (k.startsWith(`${salonId}|`)) _cache.delete(k);
 }
 
-/** Длительности, категории и названия услуг из каталога YClients; сбой → пустые карты + WARN. */
+/** Local catalog metadata; historical transaction names/prices remain snapshots. */
 async function loadServiceMeta(salon) {
-  const out = { durations: new Map(), categories: new Map(), titles: new Map(), staffByService: new Map() };
-  try {
-    const meta = await ycGetServiceMeta(salon);
-    if (meta && meta.durationByService) out.durations = meta.durationByService;
-    // Категории всех услуг, включая «инд.»: booking-каталог (priced ниже) их не
-    // отдаёт, и категорийные правила оплаты на них не матчились бы. Та же
-    // кэшированная выгрузка /company/{cid}/services/ — без лишнего запроса.
-    if (meta && meta.categoryByService) for (const [k, v] of meta.categoryByService) out.categories.set(k, v);
-  } catch (e) { logger.warn(`service meta: ${e.message}`); }
-  try {
-    const cat = await ycGetServiceCatalog(salon);
-    for (const s of (cat && cat.priced) || []) {
-      if (!out.categories.has(String(s.id)) || out.categories.get(String(s.id)) == null) {
-        out.categories.set(String(s.id), s.category_id != null ? Number(s.category_id) : null);
-      }
-      out.titles.set(String(s.id), s.title || '');
-    }
-    if (cat && cat.staffIdsByService) out.staffByService = cat.staffIdsByService;
-  } catch (e) { logger.warn(`service catalog: ${e.message}`); }
-  return out;
+  const { meta } = await loadCatalog(salon.id);
+  return { durations: meta.durationByService, categories: meta.categoryByService,
+    titles: meta.titleByService, staffByService: new Map() };
 }
 
 function buildCtx(data, meta) {

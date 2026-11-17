@@ -1,5 +1,10 @@
 'use strict';
 
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
+
 // Регресс на инцидент 2026-08-01: клиент просил «Голливуд» на завтра, модель
 // проверила слоты только запрошенного мастера (Юлии), получила пусто и сказала
 // «на завтра свободных окошек нет» — хотя у Татьяны было 14:00 на ту же услугу.

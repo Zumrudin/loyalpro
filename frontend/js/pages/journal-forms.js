@@ -240,7 +240,7 @@ function jrForm(record, preset = {}) {
     journal.lines = {};
     jrEl('jrServiceSearch').value = '';
     jrEl('jrServiceSelection').textContent = '';
-    jrEl('jrServices').innerHTML = journal.data.services.filter(s => s.staffIds.includes(staffId)).map(s => `<option value="${s.id}">${jrEscape(s.title)}${s.duration ? ' · ' + s.duration + ' мин.' : ''}</option>`).join('');
+    jrEl('jrServices').innerHTML = journal.data.services.filter(s => s.staffIds.includes(staffId)).map(s => `<option value="${s.id}">${jrEscape(s.title)} · ${jrEscape(jrServiceMeta(s))}</option>`).join('');
     jrRenderServiceChoices();
     if (!jrEl('jrServices').options.length) jrEl('jrSlotInfo').textContent = 'У сотрудника нет доступных услуг. Проверьте раздел «Услуги» и импорт каталога.';
   };

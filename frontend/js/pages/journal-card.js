@@ -148,9 +148,10 @@ function jrStatusBar(record, canEdit = false) {
   }).join('')}</div>`;
 }
 function jrServiceDuration(record, s) {
-  const c = (journal.data?.services || []).find(x => Number(x.yclientsId) === Number(s.id));
-  const d = c?.staffDetails?.find(x => x.id === record.staffId)?.duration || c?.duration;
-  return d || ((record.services || []).length === 1 ? record.duration : null);
+  // A saved visit is a snapshot, not today's price-list duration.
+  const seconds = Number(s.seance_length);
+  if (seconds > 0) return seconds / 60;
+  return (record.services || []).length === 1 ? record.duration : null;
 }
 // Service lines as cards «master · duration / title / price». editable: a card
 // opens the editor of quantity and cost (10.11.2026).

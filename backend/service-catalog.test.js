@@ -53,3 +53,12 @@ test('schema has composite tenant foreign keys and stable unique external mappin
  const {SERVICE_CATALOG_DDL}=require('./migrations');
  expect(SERVICE_CATALOG_DDL).toContain('FOREIGN KEY(salon_id,parent_id)');expect(SERVICE_CATALOG_DDL).toContain('FOREIGN KEY(salon_id,category_id)');expect(SERVICE_CATALOG_DDL).toContain('UNIQUE(salon_id,yclients_company_id,yclients_id)');expect(SERVICE_CATALOG_DDL).not.toMatch(/DROP|DELETE|TRUNCATE/);
 });
+
+test('base parameters reject coerced boolean/object values and fractional kopecks',()=>{
+ for(const field of ['duration','priceMin','priceMax'])for(const value of [true,false,[],[1],{}])expect(()=>service.parseService({...body,[field]:value})).toThrow();
+ for(const field of ['priceMin','priceMax'])expect(()=>service.parseService({...body,[field]:100.001})).toThrow();
+ for(const value of [null,[],true])expect(()=>service.parseService(value)).toThrow();
+ expect(service.parseService({...body,priceMin:100.25,priceMax:200.50})).toMatchObject({priceMin:100.25,priceMax:200.5});
+ expect(service.parseService({...body,priceMin:null,priceMax:null})).toMatchObject({priceMin:null,priceMax:null});
+ expect(service.parseService({...body,priceMin:'0',priceMax:''})).toMatchObject({priceMin:0,priceMax:null});
+});

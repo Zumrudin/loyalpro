@@ -1,11 +1,16 @@
 'use strict';
 
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
+
 jest.mock('./db', () => ({ pool: { query: jest.fn() } }));
 jest.mock('./services/yclients-records', () => ({
   ycGetRecord: jest.fn(), ycUpdateRecord: jest.fn(),
 }));
 jest.mock('./services/yclients', () => ({
-  ycGetServiceMeta: jest.fn(), ycGetServiceCatalog: jest.fn(),
+  ycGetServiceMeta: jest.fn(), ycGetServiceCatalog: jest.fn(), ycGet: jest.fn(),
 }));
 jest.mock('./services/yclients-booking', () => ({
   ycGetDayRecords: jest.fn(),
@@ -462,4 +467,59 @@ describe('confirmBookingRecord', () => {
       expect(ycr.ycUpdateRecord.mock.calls[0][0].yclients_user_token).toBe('integration-token');
     } finally { config.YCLIENTS_INTEGRATION_USER_TOKEN = prev; }
   });
+});
+
+
+describe('managed additions retain booked history', () => {
+ const policy = require('./services/service-catalog-policy');
+ afterEach(() => policy.load.mockResolvedValue(new Map()));
+ test('current override applied even when upstream metadata fails; retained cost and interval preserved', async () => {
+  policy.load.mockResolvedValue(new Map([['20',{active:true,staffDetails:[{id:7,duration:45,priceMin:0}]}]]));
+  ycr.ycGetRecord.mockResolvedValue({...REC,services:[{id:10,cost:123,amount:1}]});
+  yc.ycGet.mockResolvedValue([{id:20}]);
+  yc.ycGetServiceCatalog.mockResolvedValue({staffIdsByService:new Map([['20',new Set(['7'])]])});
+  yc.ycGetServiceMeta.mockRejectedValue(new Error('synthetic outage'));
+  yb.ycGetDayRecords.mockResolvedValue([]);
+  ycr.ycUpdateRecord.mockResolvedValue({id:555});
+  const out = await modifyBookingServices(1,{dialogKey:'synthetic',recordId:555,addServiceYcIds:[20]});
+  expect(out.ok).toBe(true);
+  expect(ycr.ycUpdateRecord).toHaveBeenCalledWith(expect.anything(),555,expect.objectContaining({seance_length:6300,services:[{id:10,cost:123,amount:1},{id:20,cost:0}]}));
+ });
+ test('new local service assignment removed after offer prevents mutation', async () => {
+  policy.load.mockResolvedValue(new Map([['20',{active:true,staffDetails:[]}]]));
+  ycr.ycGetRecord.mockResolvedValue(REC);
+  const out = await modifyBookingServices(1,{dialogKey:'synthetic',recordId:555,addServiceYcIds:[20]});
+  expect(out).toMatchObject({ok:false,invalid_service:true});
+  expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+ });
+});
+
+describe('managed removals preserve historical duration', () => {
+ const policy = require('./services/service-catalog-policy');
+ beforeEach(() => {
+  policy.load.mockResolvedValue(new Map([
+   ['10',{active:false,staffDetails:[]}],
+   ['30',{active:true,staffDetails:[{id:7,duration:20,priceMin:0}]}],
+  ]));
+  // Current metadata differs from the historical booking and must not shorten it.
+  yc.ycGetServiceMeta.mockResolvedValue({durationByService:new Map([['10',5400],['20',600]])});
+  yc.ycGet.mockResolvedValue([{id:30}]);
+  yc.ycGetServiceCatalog.mockResolvedValue({staffIdsByService:new Map([['30',new Set(['7'])]])});
+  yb.ycGetDayRecords.mockResolvedValue([]);
+  ycr.ycUpdateRecord.mockResolvedValue({id:555});
+ });
+ afterEach(() => policy.load.mockResolvedValue(new Map()));
+ test.each([
+  {name:'removal-only without snapshot', add:[], lines:[{id:10,cost:100},{id:20,cost:222}], remove:[10], expected:7200},
+  {name:'add and remove without snapshot', add:[30], lines:[{id:10,cost:100},{id:20,cost:222}], remove:[10], expected:8400},
+  {name:'add and remove with saved duration', add:[30], lines:[{id:10,cost:100,seance_length:1800},{id:20,cost:222}], remove:[10], expected:6600},
+  {name:'replace every old service', add:[30], lines:[{id:10,cost:100},{id:20,cost:222}], remove:[10,20], expected:1200},
+ ])('$name', async ({add,lines,remove,expected}) => {
+  ycr.ycGetRecord.mockResolvedValue({...REC,seance_length:7200,services:lines});
+  const out=await modifyBookingServices(1,{dialogKey:'synthetic',recordId:555,addServiceYcIds:add,removeServiceYcIds:remove});
+  expect(out.ok).toBe(true);
+  const body=ycr.ycUpdateRecord.mock.calls[0][2];
+  expect(body.seance_length).toBe(expected);
+  if(!remove.includes(20)) expect(body.services.find(s=>s.id===20)).toEqual({id:20,cost:222});
+ });
 });

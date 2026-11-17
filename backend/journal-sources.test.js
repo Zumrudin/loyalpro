@@ -1,4 +1,9 @@
 'use strict';
+
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
 jest.mock('./config', () => ({ JWT_SECRET: 'synthetic-test-secret', JOURNAL_LOCAL_FIRST: true }));
 jest.mock('./logger', () => ({ createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }) }));
 jest.mock('./db', () => ({ db: { oneOrNone: jest.fn(), any: jest.fn(), query: jest.fn() }, pool: { connect: jest.fn() } }));
@@ -28,7 +33,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   config.JOURNAL_LOCAL_FIRST = true;
   outbox = []; mirrored = [record];
-  localCatalog.forJournal.mockResolvedValue({ categories: [], services: [] });
+  localCatalog.forJournal.mockResolvedValue({ categories: [], services: [{id:70,yclientsId:7,staffIds:[1,2]}] });
   mirror.freshness.mockResolvedValue({ mirrorOkAt: '2030-04-01T08:00:00.000Z' });
   db.oneOrNone.mockImplementation(async (sql, args) => {
     if (sql.includes('FROM salons')) return salon;

@@ -15,7 +15,7 @@ const { EQUIPMENT_SEED } = require('../services/economics/equipment-seed');
 const { equipmentMonthly } = require('../services/economics/allocation');
 const { createLogger } = require('../logger');
 const { resolvePeriod: resolvePeriodShared, isCalendarDate } = require('../utils/period');
-const { ycGetServiceMeta, ycGetServiceCatalog } = require('../services/yclients');
+const { loadCatalog } = require('../services/economics/catalog');
 const { buildDictionaries } = require('../services/economics/dictionaries');
 const { schemeLineConflicts, conflictText, assignmentsOverlap } = require('../services/economics/pay-rules');
 const logger = createLogger('EconomicsAPI');
@@ -278,14 +278,12 @@ router.post('/services/:serviceId(\\d+)/tech-card/lookup', async (req, res) => {
 router.get('/dictionaries', async (req, res) => {
   try {
     const salon = await salonOr404(req, res); if (!salon) return;
-    const [meta, catalog, staff, recentServices] = await Promise.all([
-      ycGetServiceMeta(salon).catch(e => { logger.warn(`dictionaries meta: ${e.message}`); return null; }),
-      ycGetServiceCatalog(salon).catch(e => { logger.warn(`dictionaries catalog: ${e.message}`); return null; }),
-      store.listDictionaryStaff(salon.id),
-      store.listRecentServices(salon.id),
+    const [local, staff, recentServices] = await Promise.all([
+      loadCatalog(salon.id), store.listDictionaryStaff(salon.id), store.listRecentServices(salon.id),
     ]);
-    const d = buildDictionaries({ meta, catalog, staff, recentServices });
-    if (d.degraded) logger.warn(`salon=${salon.id}: справочник услуг без каталога YClients (degraded)`);
+    const d = buildDictionaries({ ...local, staff, recentServices });
+    d.degraded = false;
+    d.unlinked_services = local.unlinkedServices;
     res.json(d);
   } catch (e) { fail(res, 'dictionaries')(e); }
 });

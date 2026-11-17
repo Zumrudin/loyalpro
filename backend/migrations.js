@@ -94,6 +94,9 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
 
+  await client.query(SERVICE_STAFF_ASSIGNMENTS_DDL);
+  await client.query(SERVICE_CATEGORY_PHOTOS_DDL);
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS staff_schedule (
       id SERIAL PRIMARY KEY,
@@ -2777,6 +2780,51 @@ CREATE TABLE IF NOT EXISTS service_catalog (
 );
 CREATE INDEX IF NOT EXISTS service_catalog_category ON service_catalog(salon_id,category_id);
 `;
+const SERVICE_CATEGORY_PHOTOS_DDL = `
+CREATE UNIQUE INDEX IF NOT EXISTS service_categories_salon_id_id ON service_categories(salon_id,id);
+CREATE TABLE IF NOT EXISTS service_category_price_photos (
+ id SERIAL PRIMARY KEY, salon_id INTEGER NOT NULL REFERENCES salons(id), category_id INTEGER NOT NULL,
+ file_url VARCHAR(500) NOT NULL, file_name VARCHAR(255) NOT NULL, mime_type VARCHAR(100) NOT NULL,
+ byte_size INTEGER NOT NULL DEFAULT 0 CHECK(byte_size>=0), display_order INTEGER NOT NULL DEFAULT 0,
+ legacy_photo_id INTEGER UNIQUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ FOREIGN KEY(salon_id,category_id) REFERENCES service_categories(salon_id,id)
+);
+CREATE INDEX IF NOT EXISTS service_category_photos_node ON service_category_price_photos(salon_id,category_id,display_order,id);
+CREATE TABLE IF NOT EXISTS service_category_aliases (
+ salon_id INTEGER NOT NULL REFERENCES salons(id), legacy_key TEXT NOT NULL, category_id INTEGER NOT NULL,
+ PRIMARY KEY(salon_id,legacy_key), FOREIGN KEY(salon_id,category_id) REFERENCES service_categories(salon_id,id)
+);
+CREATE TABLE IF NOT EXISTS service_photo_transfer_runs (
+ id UUID PRIMARY KEY, salon_id INTEGER NOT NULL REFERENCES salons(id), snapshot JSONB NOT NULL,
+ status TEXT NOT NULL DEFAULT 'preview' CHECK(status IN ('preview','applied')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), applied_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS service_photo_transfer_once ON service_photo_transfer_runs(salon_id) WHERE status='applied';
+`;
+
+const SERVICE_STAFF_ASSIGNMENTS_DDL = `
+ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS assignments_initialized BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS staff_members_salon_id_id ON staff_members(salon_id,id);
+CREATE TABLE IF NOT EXISTS service_staff_assignments (
+ salon_id INTEGER NOT NULL REFERENCES salons(id), service_id INTEGER NOT NULL,
+ staff_member_id INTEGER NOT NULL, price_min NUMERIC(12,2), price_max NUMERIC(12,2),
+ duration INTEGER CHECK(duration BETWEEN 1 AND 1440),
+ source TEXT NOT NULL DEFAULT 'local', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,service_id,staff_member_id),
+ FOREIGN KEY(salon_id,service_id) REFERENCES service_catalog(salon_id,id),
+ FOREIGN KEY(salon_id,staff_member_id) REFERENCES staff_members(salon_id,id),
+ CHECK(price_min IS NULL OR price_min BETWEEN 0 AND 1000000000),
+ CHECK(price_max IS NULL OR (price_min IS NOT NULL AND price_max BETWEEN price_min AND 1000000000))
+);
+CREATE INDEX IF NOT EXISTS service_staff_assignments_staff ON service_staff_assignments(salon_id,staff_member_id);
+CREATE TABLE IF NOT EXISTS service_catalog_sync_runs (
+ id UUID PRIMARY KEY, salon_id INTEGER NOT NULL REFERENCES salons(id), company_id TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'preview' CHECK(status IN ('preview','applied')),
+ snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), applied_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS service_catalog_sync_runs_salon ON service_catalog_sync_runs(salon_id,created_at);
+`;
 const JOURNAL_FINANCE_DDL = `
 CREATE TABLE IF NOT EXISTS journal_financial_transactions (
  salon_id INTEGER NOT NULL REFERENCES salons(id), operation_id UUID NOT NULL,
@@ -3438,4 +3486,4 @@ BEGIN
 END $$;
 `;
 
-module.exports = { HOME_CARE_TENANT_INTEGRITY_DDL, REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };
+module.exports = { SERVICE_CATEGORY_PHOTOS_DDL, SERVICE_STAFF_ASSIGNMENTS_DDL, HOME_CARE_TENANT_INTEGRITY_DDL, REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };

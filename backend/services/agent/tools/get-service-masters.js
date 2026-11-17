@@ -64,7 +64,7 @@ async function run(salonId, input) {
         // Цена за единицу препарата: ни price_display с числом, ни сырых
         // price_min/price_max — модель не должна видеть 370 ₽ ни в ответе
         // инструмента, ни в памяти между ходами.
-        if (unitPrice) return { yc_id: m.yc_id, name: m.name, price_display: 'инд.' };
+        if (unitPrice) return { yc_id: m.yc_id, name: m.name, duration_min: m.duration_min, price_display: 'инд.' };
         const p = fmtPrice(m.price_min, m.price_max);
         const men = maleMarkup ? fmtMalePrice(m.price_min, m.price_max) : '';
         return {

@@ -15,6 +15,8 @@ const os = require('os');
 const http = require('http');
 const express = require('express');
 
+jest.mock('./db',()=>({db:{oneOrNone:jest.fn().mockResolvedValue(null)}}));
+jest.mock('./services/service-catalog',()=>({transaction:async(salonId,fn)=>fn({query:async(sql,args)=>({rows:[await require('./db').db.oneOrNone(sql,args)].filter(Boolean)})})}));
 jest.mock('./middleware/auth', () => ({
   auth: (req, res, next) => { req.user = { salonId: 1, role: 'owner' }; next(); },
   requireRole: () => (req, res, next) => next(),
@@ -222,4 +224,12 @@ test('PUT /price-photos/reorder прокидывает items в сервис, о
 
   expect(mockReorderPricePhotos).toHaveBeenCalledWith(1, items); // salonId, items
   expect(mockInvalidate).toHaveBeenCalledWith(1);
+});
+
+test('migrated catalog rejects cached legacy mutations before touching shared files',async()=>{
+ const db=require('./db').db;db.oneOrNone.mockResolvedValue({id:'synthetic-run'});
+ try{for(const [method,url]of [['DELETE','/price-photos/42'],['POST','/service-subcategories'],['POST','/service-placements']]){
+  const r=await fetch(baseUrl+url,{method});expect(r.status).toBe(409);
+ }expect(mockRemovePricePhoto).not.toHaveBeenCalled();expect(mockAddPricePhoto).not.toHaveBeenCalled();}
+ finally{db.oneOrNone.mockResolvedValue(null);}
 });

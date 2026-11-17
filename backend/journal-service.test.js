@@ -1,4 +1,9 @@
 'use strict';
+
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
 jest.mock('./config', () => ({ JWT_SECRET: 'synthetic-test-secret' }));
 jest.mock('./db', () => ({ db: { oneOrNone: jest.fn(), any: jest.fn() }, pool: { connect: jest.fn() } }));
 jest.mock('./services/service-catalog', () => ({forJournal:jest.fn(),resolve:jest.fn(),journalService:jest.requireActual('./services/service-catalog').journalService}));
@@ -13,7 +18,7 @@ const record = { id: 8, staff_id: 1, datetime: '2030-04-01T10:00:00+03:00', sean
 let conn, prior, unresolved;
 const draft = () => ({ operationId, action: 'confirm', recordId: 8, version: m.revision(record) });
 beforeEach(() => {
-  jest.clearAllMocks(); localCatalog.forJournal.mockResolvedValue({categories:[],services:[{id:70,title:'Local',duration:60,priceMin:500,staffIds:[1]}]}); prior = null; unresolved = null;
+  jest.clearAllMocks(); localCatalog.forJournal.mockResolvedValue({categories:[],services:[{id:70,yclientsId:7,title:'Local',duration:60,priceMin:500,staffIds:[1]}]}); prior = null; unresolved = null;
   conn = { release: jest.fn(), query: jest.fn(async sql => {
     if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
     if (sql.includes('SELECT request_hash')) return { rows: prior ? [prior] : [] };
@@ -473,4 +478,37 @@ test('local detail includes confirmed external payment breakdown and full status
     expect(yc.write).not.toHaveBeenCalled();
     expect(yc.getRecord).not.toHaveBeenCalled();
   } finally { source.mockRestore(); open.mockRestore(); }
+});
+
+describe('managed local policies for external-ID drafts', () => {
+ const policy = require('./services/service-catalog-policy');
+ afterEach(() => policy.load.mockResolvedValue(new Map()));
+ test('current specialist price and duration used for new journal record', async () => {
+  policy.load.mockResolvedValue(new Map([['7', {active:true,staffDetails:[{id:1,duration:45,priceMin:0}]}]]));
+  const out = await service.availability({id:3,yclients_company_id:30},{staffId:1,date:'2030-04-01',time:'09:00',serviceIds:[7]});
+  expect(out.duration).toBe(45);
+  expect(out.servicePayload).toEqual([{id:7,cost:0}]);
+  const repeated = await service.availability({id:3,yclients_company_id:30},{staffId:1,date:'2030-04-01',time:'09:00',serviceIds:[7],lines:[{serviceId:7,quantity:2,unitPrice:100,gross:200,discount:0,total:200}]});
+  expect(repeated.duration).toBe(90);
+  expect(repeated.servicePayload[0]).toMatchObject({id:7,amount:2,cost:200});
+ });
+ test('moving existing visit to unassigned specialist is blocked', async () => {
+  policy.load.mockResolvedValue(new Map([['7', {active:true,staffDetails:[]}]]));
+  await expect(service.availability({id:3,yclients_company_id:30},{staffId:1,date:'2030-04-01',time:'09:00'}, {...record,staff_id:2})).rejects.toThrow(/назначена/);
+ });
+});
+
+describe('canonical settings assignments for journal writes', () => {
+ test.each([[], [{yclientsId:7,staffIds:[]}], [{yclientsId:99,staffIds:[1]}]].map(services => [services]))('rejects external create missing local pair %j', async services => {
+  localCatalog.forJournal.mockResolvedValue({services});
+  await expect(service.availability({id:3,yclients_company_id:30},{staffId:1,date:'2030-04-01',serviceIds:[7]})).rejects.toMatchObject({code:'service_assignment'});
+  expect(localCatalog.forJournal).toHaveBeenCalledWith(3);
+  expect(yc.write).not.toHaveBeenCalled();
+ });
+ test('same-specialist historical move retains removed assignment; changing specialist cannot', async () => {
+  localCatalog.forJournal.mockResolvedValue({services:[]});
+  const draft = {staffId:1,date:'2030-04-01'};
+  await expect(service.availability({id:3,yclients_company_id:30},draft,record)).resolves.toMatchObject({duration:60});
+  await expect(service.availability({id:3,yclients_company_id:30},draft,{...record,staff_id:2})).rejects.toMatchObject({code:'service_assignment'});
+ });
 });

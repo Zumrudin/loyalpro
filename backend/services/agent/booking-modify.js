@@ -3,7 +3,7 @@
 const { pool } = require('../../db');
 const config = require('../../config');
 const { ycGetRecord, ycUpdateRecord } = require('../yclients-records');
-const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
+const { ycGetServiceMeta, ycGetServiceCatalog, ycGet } = require('../yclients');
 const { ycGetDayRecords } = require('../yclients-booking');
 const { withRateLimitRetry } = require('../yclients-retry');
 const { wrongServiceHint, shortSlotHint } = require('./slot-evidence');
@@ -215,6 +215,11 @@ async function rescheduleBookingRecord(salonId, {
   // ответил → unknown → не блокируем (fail-open, как staff-service-guard везде).
   const newStaff = staffYcId && String(staffYcId) !== String(rec.staff_id) ? staffYcId : null;
   if (newStaff) {
+    const policy = require('../service-catalog-policy');
+    try {
+      const managed = await policy.load(salonId);
+      await policy.verifyExternal(salon, newStaff, serviceIds(rec).map(s => s.id), managed);
+    } catch (_) { return { ok: false, staffMismatch: true, error: 'Не подтверждено назначение услуг новому специалисту. Обновите каталог.' }; }
     const staffGuard = require('./staff-service-guard');
     for (const s of serviceIds(rec)) {
       let chk = null;
@@ -298,6 +303,13 @@ async function modifyBookingServices(salonId, {
   // Визит без услуг оставлять нельзя — это отмена (у агента есть cancel_booking).
   if (!ids.length) return { ok: false, removed_all: true };
 
+  const policy = require('../service-catalog-policy');
+  let managed;
+  try {
+    managed = await policy.load(salonId);
+    await policy.verifyExternal(salon, rec.staff_id, addIds, managed);
+  } catch (_) { return { ok: false, invalid_service: true, error: 'Не подтверждено назначение добавляемой услуги специалисту. Обновите каталог.' }; }
+
   // Добавляемая услуга должна реально выполняться мастером ЭТОЙ записи.
   // Fail-open: каталог недоступен → не блокируем (как в create_booking).
   if (addIds.length) {
@@ -318,8 +330,35 @@ async function modifyBookingServices(salonId, {
   // create_booking. Если сумма нулевая (мета недоступна) — фолбэк на прежнюю.
   const meta = await ycGetServiceMeta(salon).catch(() => null);
   let total = 0;
-  if (meta && meta.durationByService) {
-    for (const id of ids) total += Number(meta.durationByService.get(String(id))) || 0;
+  const added = ids.filter(id => !(rec.services || []).some(s => Number(s.id) === id));
+  const oldLines = rec.services || [];
+  const managedModification = [...ids, ...oldLines.map(s => s.id)].some(id => managed.has(String(id)));
+  if (managedModification) {
+    const retained = oldLines.filter(s => ids.includes(Number(s.id)));
+    // A current catalog duration is not a snapshot of the booked interval.
+    // Without a saved line duration, keep that time reserved conservatively.
+    // Replacing every old line has no historical interval left to preserve.
+    total = retained.length ? Number(rec.seance_length) || 0 : 0;
+    if (retained.length && !(total > 0)) return { ok: false, error: 'Не удалось определить прежнюю длительность визита.' };
+    for (const line of oldLines) {
+      if (!retained.length || ids.includes(Number(line.id))) continue;
+      const snapshot = Number(line.seance_length);
+      if (snapshot > 0 && snapshot < total) total -= snapshot;
+    }
+    const externalAdded = added.filter(id => !managed.has(String(id)));
+    const source = externalAdded.length
+      ? await ycGet(salon, `/company/${salon.yclients_company_id}/services/`, {}).catch(() => null) : [];
+    for (const id of added) {
+      const local = policy.pair(managed, id, rec.staff_id);
+      const external = Array.isArray(source) ? source.find(s => Number(s.id) === id) : null;
+      const staff = external?.staff?.find(s => Number(s.id) === Number(rec.staff_id));
+      const seconds = local ? local.duration * 60 : Number(staff?.seance_length ?? external?.duration);
+      if (!(seconds > 0)) return { ok: false, error: 'Не удалось определить длительность добавляемых услуг.' };
+      total += seconds;
+    }
+    if (!(total > 0)) return { ok: false, error: 'Некорректная длительность визита.' };
+  } else {
+    for (const id of ids) total += Number(meta?.durationByService?.get(String(id))) || 0;
   }
   const seanceLength = total || Number(rec.seance_length) || 0;
 
@@ -342,7 +381,12 @@ async function modifyBookingServices(salonId, {
   try {
     await withRateLimitRetry(() => ycUpdateRecord(authSalonFor(salon), recordId, {
       staff_id: rec.staff_id,
-      services: ids.map(id => ({ id })),
+      services: ids.map(id => {
+        const existing = (rec.services || []).find(s => Number(s.id) === id);
+        if (existing) return Object.fromEntries(['id', 'cost', 'amount', 'discount', 'first_cost', 'cost_per_unit'].filter(key => existing[key] !== undefined).map(key => [key, existing[key]]));
+        const local = policy.pair(managed, id, rec.staff_id);
+        return { id, ...(local?.priceMin == null ? {} : { cost: local.priceMin }) };
+      }),
       client: clientOf(rec),
       datetime: rec.datetime,
       seance_length: seanceLength,

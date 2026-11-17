@@ -349,3 +349,12 @@ test('Task 22: ecoRenderWarnings — экранирует и режет спис
   assert.strictEqual(el.innerHTML, '');
   delete ctx.document;
 });
+
+test('reopening economics reloads catalog and report after settings edits', () => {
+  const c = browserContext();
+  vm.runInContext(fs.readFileSync(path.join(FRONT, 'js/pages/economics.js'), 'utf8'), c);
+  vm.runInContext(`_eco.dicts={services:[{id:1,title:'Old'}]};_eco.report={old:true};
+    ecoEnsurePeriod=()=>{};ecoRenderPeriod=()=>{};ecoSwitchTab=()=>{};loadEconomics();`, c);
+  assert.strictEqual(vm.runInContext('_eco.dicts', c), null);
+  assert.strictEqual(vm.runInContext('_eco.report', c), null);
+});

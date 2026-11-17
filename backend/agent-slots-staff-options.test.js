@@ -1,5 +1,10 @@
 'use strict';
 
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
+
 // Пациент не назвал врача → выбор мастера делает ОН, а не модель: без staff_yc_id
 // инструмент считает окна у всех исполнителей услуги и отдаёт их списком.
 // Раньше модель брала мастера сама и молча предлагала его (у главврача цена выше).

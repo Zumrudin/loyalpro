@@ -12,39 +12,21 @@ let _asData = { serviceMode: 'all', categories: [] };
 let _asRules = [];
 let _asShowAll = false;             // false → active + настроенные; true → весь каталог
 const _asOpenCats = new Set();      // id раскрытых категорий (по умолчанию свёрнуты)
-let _asPhotos = [];                 // фото прайса всех узлов салона
 let _asPriceUrl = '';               // ссылка на прайс на сайте
 let _asSettings = {};               // ПОЛНЫЙ ответ GET /api/agent/settings — PUT сохраняет его же
                                      // целиком с точечной правкой priceListUrl: PUT /settings трактует
                                      // отсутствие enabled/mode как false/'all' (см. agent-settings.js),
                                      // и отправка одного priceListUrl молча выключила бы агента.
-let _asPriceNode = null;            // открытый в модалке узел { kind:'cat'|'sub', id, title }
 
 async function loadAgentServices() {
   try {
     _asData = await api('GET', '/api/agent/services');
     const r = await api('GET', '/api/agent/service-rules');
     _asRules = r.rules || [];
-    const ph = await api('GET', '/api/agent/price-photos');
-    _asPhotos = ph.photos || [];
     _asSettings = await api('GET', '/api/agent/settings');
     _asPriceUrl = _asSettings.priceListUrl || '';
     renderAgentServices();
   } catch (e) { console.error('agent-services:', e); notify('Ошибка загрузки услуг', 'err'); }
-}
-
-// Фото узла (категория или подкатегория) в порядке администратора.
-function _photosOf(kind, id) {
-  return _asPhotos
-    .filter(p => (kind === 'cat'
-      ? String(p.ycCategoryId) === String(id)
-      : String(p.subcategoryId) === String(id)))
-    .sort((a, b) => (a.displayOrder - b.displayOrder) || (a.id - b.id));
-}
-
-function _priceBtn(kind, id, title) {
-  const n = _photosOf(kind, id).length;
-  return `<button type="button" class="as-mini as-price-btn" data-kind="${kind}" data-id="${id}" data-title="${_asEsc(title)}">🖼 Прайс${n ? ` (${n})` : ''}</button>`;
 }
 
 // Есть ли у услуги хоть какое-то правило — по нему решаем, показывать ли
@@ -158,43 +140,6 @@ async function _removeRuleFor(svcId, staffId, ruleType) {
   if (rule) await api('DELETE', `/api/agent/service-rules/${rule.id}`);
 }
 
-// ── Подкатегории: создание / переименование / удаление; перемещение услуги ──
-
-async function _addSubcategory(ycCategoryId, parentId) {
-  const title = (prompt('Название подкатегории:') || '').trim();
-  if (!title) return;
-  try {
-    const body = { ycCategoryId, title };
-    if (parentId != null) body.parentId = parentId;
-    await api('POST', '/api/agent/service-subcategories', body);
-    await loadAgentServices();
-  } catch (e) { notify('Не удалось создать подкатегорию', 'err'); }
-}
-
-async function _renameSubcategory(id, current) {
-  const title = (prompt('Новое название подкатегории:', current) || '').trim();
-  if (!title) return;
-  try {
-    await api('PUT', `/api/agent/service-subcategories/${id}`, { title });
-    await loadAgentServices();
-  } catch (e) { notify('Не удалось переименовать', 'err'); }
-}
-
-async function _removeSubcategory(id) {
-  if (!confirm('Удалить подкатегорию? Услуги вернутся в родительскую категорию.')) return;
-  try {
-    await api('DELETE', `/api/agent/service-subcategories/${id}`);
-    await loadAgentServices();
-  } catch (e) { notify('Не удалось удалить подкатегорию', 'err'); }
-}
-
-async function _placeService(svcId, subcategoryId) {
-  try {
-    await api('POST', '/api/agent/service-placements', { ycServiceId: svcId, subcategoryId: subcategoryId || null });
-    await loadAgentServices();
-  } catch (e) { notify('Не удалось переместить услугу', 'err'); }
-}
-
 function _price(s) {
   const min = Number(s.price_min) || 0, max = Number(s.price_max) || 0;
   if (max > 0) {
@@ -221,9 +166,7 @@ function _svcRow(s, subcatOptions) {
     ' <span class="muted" title="Услуга не выставлена в онлайн-запись YClients">(не в онлайн-записи)</span>';
   const staff = (s.staff || []).map(st =>
     `<label class="as-pair"><input type="checkbox" data-svc="${s.yc_id}" data-staff="${st.yc_id}" class="as-pair-cb" ${st.hidden ? '' : 'checked'}> ${_asEsc(st.name)}</label>`).join('');
-  const move = (subcatOptions && subcatOptions.length)
-    ? `<div class="as-move-wrap"><span class="muted">переместить:</span> ${_moveSelect(s, subcatOptions)}</div>`
-    : '';
+  const move = '';
   return `<div class="as-svc">
     <label class="as-svc-head"><input type="checkbox" class="as-svc-cb" data-svc="${s.yc_id}" ${s.visible ? 'checked' : ''}>
       <b>${_asEsc(s.title)}</b> <span class="muted as-price">${_price(s)}</span>${inactive}</label>
@@ -246,10 +189,6 @@ function _renderSubcat(sc, topCatId, subcatOptions) {
     <div class="as-subcat-head">
       <span class="as-subcat-title">${_asEsc(sc.title)}</span>
       <span class="as-subcat-actions">
-        ${_priceBtn('sub', sc.id, sc.title)}
-        <button type="button" class="as-mini as-add-sub" data-cat="${topCatId}" data-parent="${sc.id}">＋ подкатегория</button>
-        <button type="button" class="as-mini as-sub-rename" data-id="${sc.id}" data-title="${_asEsc(sc.title)}">переименовать</button>
-        <button type="button" class="as-mini as-danger as-sub-del" data-id="${sc.id}">удалить</button>
       </span>
     </div>
     <div class="as-subcat-body">${body || '<span class="muted as-empty">пусто</span>'}</div>
@@ -280,9 +219,6 @@ function renderAgentServices() {
     const vis = shown.filter(s => s.visible).length;
     const subcatOptions = _flattenSubcats(cat.subcategories, 0, []);
     const canAddSub = cat.id != null && String(cat.id) !== 'null';
-    const addBtn = canAddSub
-      ? `<button type="button" class="as-mini as-add-sub as-cat-add" data-cat="${cat.id}">＋ подкатегория</button>`
-      : '';
     const body = open ? _renderNodeBody(cat, cat.id, subcatOptions) : '';
     return `<div class="as-cat" data-cat="${cat.id}">
       <div class="as-cat-head">
@@ -292,8 +228,7 @@ function renderAgentServices() {
           <span class="as-cat-title">${_asEsc(cat.title)}</span>
           <span class="muted as-cat-count">${vis}/${shown.length}</span>
         </button>
-        ${canAddSub ? _priceBtn('cat', cat.id, cat.title) : ''}
-        ${addBtn}
+        <button type="button" class="as-mini as-settings-link" data-settings-services>Редактировать в настройках услуг</button>
       </div>
       <div class="as-cat-body" ${open ? '' : 'hidden'}>${body}</div>
     </div>`;
@@ -311,7 +246,7 @@ function renderAgentServices() {
       <p class="muted">Отмеченная услуга видна агенту. Чекбокс категории показывает/скрывает все услуги
         внутри (включая подкатегории) сразу. Услуги «не в онлайн-записи» по умолчанию скрыты — включите нужные вручную.
         Снимите галочку у мастера, чтобы скрыть ошибочную пару услуга×мастер.
-        Кнопкой «＋ подкатегория» стройте вложенное дерево; списком «переместить» кладите услугу в подкатегорию.</p>
+        Названия, категории, цены, назначения и картинки прайса редактируются в настройках услуг.</p>
     </div>
     <div class="as-cats">${catHtml || '<p class="muted">Нет услуг с ценой (или YClients не подключён).</p>'}</div>`;
 
@@ -343,14 +278,8 @@ function renderAgentServices() {
     cb.onchange = () => _toggleService(cb.dataset.svc, cb.checked));
   root.querySelectorAll('.as-pair-cb').forEach(cb =>
     cb.onchange = () => _togglePair(cb.dataset.svc, cb.dataset.staff, !cb.checked));
-  root.querySelectorAll('.as-move').forEach(sel =>
-    sel.onchange = () => _placeService(sel.dataset.svc, sel.value || null));
-  root.querySelectorAll('.as-add-sub').forEach(btn =>
-    btn.onclick = () => _addSubcategory(btn.dataset.cat, btn.dataset.parent || null));
-  root.querySelectorAll('.as-sub-rename').forEach(btn =>
-    btn.onclick = () => _renameSubcategory(btn.dataset.id, btn.dataset.title));
-  root.querySelectorAll('.as-sub-del').forEach(btn =>
-    btn.onclick = () => _removeSubcategory(btn.dataset.id));
+  root.querySelectorAll('[data-settings-services]').forEach(btn =>
+    btn.onclick = () => navTo('service-catalog'));
 
   const urlSave = root.querySelector('#as-price-url-save');
   if (urlSave) urlSave.onclick = async () => {
@@ -372,10 +301,9 @@ function renderAgentServices() {
       notify('Ссылка сохранена', 'ok');
     } catch (e) { notify('Не удалось сохранить ссылку', 'err'); }
   };
-  root.querySelectorAll('.as-price-btn').forEach(btn =>
-    btn.onclick = () => _openPriceModal(btn.dataset.kind, btn.dataset.id, btn.dataset.title));
 }
 
+/* Legacy price-photo modal removed from the Mila screen. Settings owns catalog photos.
 // ── Модалка «Прайс раздела»: сетка фото, загрузка, порядок, удаление ──
 // Разметка создаётся из JS (на странице «Услуги агента» нет статического модального
 // контейнера) по образцу существующей agent-settings-modal: обёртка .ov + .modal,
@@ -479,3 +407,4 @@ async function _removePricePhoto(id) {
     _renderPriceGrid();
   } catch (e) { notify('Не удалось удалить фото', 'err'); }
 }
+*/

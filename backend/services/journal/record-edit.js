@@ -119,9 +119,14 @@ async function patch(salon, record, input, src, availability, paid = false) {
   if (edit.lines) {
     const existing = record.services || [];
     const all = await src.services();
+    const policy = require('../service-catalog-policy');
+    const managed = await policy.load(salon.id);
+    const addedIds = edit.lines.filter(l => !existing.some(s => Number(s.id) === l.serviceId)).map(l => l.serviceId);
+    await require('./service-assignments').requireAssigned(salon.id, addedIds, record.staff_id);
     out.services = edit.lines.map(l => {
       const old = existing.find(s => Number(s.id) === l.serviceId);
       const service = all.find(s => Number(s.id) === l.serviceId);
+      if (!old) policy.pair(managed, l.serviceId, record.staff_id);
       if (!old && (!service || service.deleted || service.archive || service.is_deleted || !service.staff?.some(s => Number(s.id || s) === Number(record.staff_id)))) m.fail('Услуга недоступна у сотрудника.', 409);
       // cost_to_pay/manual_cost describe the OLD price; carried over they would
       // contradict the new cost (YClients recalculates them from cost).

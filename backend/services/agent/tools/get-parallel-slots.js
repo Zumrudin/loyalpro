@@ -95,6 +95,8 @@ async function run(salonId, input, ctx = {}) {
     }
   }
 
+  const policy = require('../../service-catalog-policy');
+  const managed = await policy.load(salonId);
   const eqCtx = await eqContext.loadEquipmentContext(salon, date);
 
   // Заявка на гостя: окна его мастера + длительность услуги + нужные аппараты.
@@ -112,7 +114,7 @@ async function run(salonId, input, ctx = {}) {
         .map(s => ({ start: eq.toMin(s.time), end: eq.toMin(s.time) + 5 })));
     entries.push({
       ranges,
-      durationMin: eqContext.durationMin(eqCtx, g.service_yc_id) || DEFAULT_DURATION_MIN,
+      durationMin: policy.pair(managed, g.service_yc_id, g.staff_yc_id)?.duration || eqContext.durationMin(eqCtx, g.service_yc_id) || DEFAULT_DURATION_MIN,
       instances: eqContext.instancesFor(eqCtx, g.service_yc_id),
       service_yc_id: g.service_yc_id,
       staff_yc_id: g.staff_yc_id,

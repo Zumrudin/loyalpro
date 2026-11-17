@@ -98,6 +98,9 @@ const SKIP_TOOLS = new Set([
   // был вызван» и ни одного факта.
   'list_staff',
   'list_services',
+  // Pending additional visit is rendered from additional-proposals.prompt;
+  // duplicating its tool result here can outlive replacement/expiry.
+  'prepare_additional_booking',
 ]);
 
 const SLOT_TIMES_FRESH_MS = 30 * 60 * 1000;
@@ -328,17 +331,18 @@ const EXTRACTORS = {
     return `${base}: показаны варианты — ${parts.join('; ')}`;
   },
   get_service_masters(e) {
+    // Prices and durations are editable in the canonical catalog and are
+    // regenerated each turn. Persist names/IDs only: an event written before a
+    // price edit must never put the old number back into the next prompt.
     const res = e.result || {};
     const svcs = Array.isArray(res.services) ? res.services : [];
     if (!svcs.length) return null;
     const parts = svcs.slice(0, 3).map(s => {
       const st = (Array.isArray(s.staff) ? s.staff : []).slice(0, 5)
-        // Мужская цена лазерной эпиляции (стандартная +30 %) — рядом с обычной:
-        // без неё следующий ход назвал бы мужчине женскую цену.
-        .map(m => `${m.name} ${m.price_display}${m.price_display_men ? ` (мужчине ${m.price_display_men})` : ''}`).join(', ');
-      return `«${s.title}»: ${st || 'мастеров нет'}`;
+        .map(m => `${m.name}${m.yc_id ? ` (staff_yc_id=${m.yc_id})` : ''}`).join(', ');
+      return `«${s.title}»${s.yc_id ? ` (service_yc_id=${s.yc_id})` : ''}: ${st || 'мастеров нет'}`;
     });
-    return `называла цены — ${parts.join('; ')}`;
+    return `проверяла исполнителей — ${parts.join('; ')}`;
   },
   get_client_visit_history(e) {
     const res = e.result || {};

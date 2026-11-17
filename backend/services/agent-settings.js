@@ -5,7 +5,6 @@
 // Решение допуска делегируется чистому services/agent-gate.
 // ============================================================
 const { db } = require('../db');
-const { ycGetServiceCatalog } = require('./yclients');
 const { normalizePhoneKey, decideGate, parseHhMm, nowMskMinutes,
         minutesSinceWindowStart } = require('./agent-gate');
 
@@ -524,52 +523,27 @@ async function loadCategoryTreeSafe(salonId) {
 // (кто реально выполняет услугу) и текущей видимостью — для экрана админки.
 // Структура: { serviceMode, categories: [вложенное дерево с подкатегориями] }.
 async function getServicesForAdmin(salonId) {
-  const salon = await db.oneOrNone(
-    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
-       FROM salons WHERE id=$1`, [salonId]);
-  const staffRows = await db.any(
-    `SELECT yclients_staff_id, name FROM staff_members
-      WHERE salon_id=$1 AND is_active=true`, [salonId]);
-  const staffNameById = new Map(staffRows.map(s => [String(s.yclients_staff_id), s.name]));
-
-  const { priced, categories, staffIdsByService } = salon
-    ? await ycGetServiceCatalog(salon, staffRows.map(s => s.yclients_staff_id))
-    : { priced: [], categories: [], staffIdsByService: new Map() };
-
-  const filter = await loadServiceFilter(salonId);   // админке нужен реальный статус, не fail-open
+  const local = await require('./service-catalog').list(salonId);
+  const filter = await loadServiceFilter(salonId);
   const svcFilter = require('./agent/service-filter');
-  const categoryTree = require('./agent/category-tree');
-  const { subcats, placements } = await loadCategoryTree(salonId);
-  const placementBySvc = new Map(placements.map(p => [String(p.yc_service_id), p.subcategory_id]));
-
-  // Услуга → объект с мастерами (только активные, реально выполняющие), отсортированными.
-  const svcObjs = priced.map(s => {
-    const performerIds = staffIdsByService.get(String(s.id)) || new Set();
-    const staff = [...performerIds]
-      .filter(id => staffNameById.has(id))
-      .map(id => ({
-        yc_id: Number(id),
-        name: staffNameById.get(id),
-        hidden: filter.denyPairs.has(`${String(s.id)}:${id}`),
-      }))
-      .sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru'));
-    return {
-      yc_id: s.id,
-      title: s.title,
-      price_min: s.price_min,
-      price_max: s.price_max,
-      active: s.active === 1,
-      visible: svcFilter.decideOfferVisible(filter, s.id, s.active === 1),
-      category_id: s.category_id ?? null,
-      subcategory_id: placementBySvc.has(String(s.id)) ? placementBySvc.get(String(s.id)) : null,
-      _weight: Number(s.weight) || 0,
-      staff,
-    };
-  });
-
-  // Вложенное дерево категория → услуги + подкатегории (см. category-tree.js).
-  const tree = categoryTree.buildAdminTree(categories, svcObjs, subcats, placements);
-  return { serviceMode: filter.mode, categories: tree };
+  const nodes = new Map(local.categories.map(c=>[Number(c.id),{id:Number(c.id),title:c.title,
+    subcategory:c.parent_id!=null,services:[],subcategories:[]}]));
+  const roots=[];
+  for(const c of local.categories){const node=nodes.get(Number(c.id));const parent=nodes.get(Number(c.parent_id));
+    if(parent&&parent!==node)parent.subcategories.push(node);else roots.push(node);}
+  let uncategorized;
+  for(const s of local.services.filter(s=>s.linked)){
+    const staff=s.assignments.flatMap(a=>{const member=local.staffMembers.find(m=>Number(m.id)===a.staffMemberId);
+      return member?.is_active?[{yc_id:Number(member.yclients_staff_id),name:member.name,
+        hidden:filter.denyPairs.has(`${s.yclients_id}:${member.yclients_staff_id}`)}]:[];});
+    const service={yc_id:Number(s.yclients_id),title:s.title,price_min:s.price_min,price_max:s.price_max,
+      active:s.active,visible:!!s.active&&svcFilter.decideOfferVisible(filter,s.yclients_id,true),
+      category_id:s.category_id,subcategory_id:null,staff};
+    let node=nodes.get(Number(s.category_id));
+    if(!node){if(!uncategorized){uncategorized={id:null,title:'Без категории',services:[],subcategories:[]};roots.push(uncategorized);}node=uncategorized;}
+    node.services.push(service);
+  }
+  return {serviceMode:filter.mode,categories:roots,source:'service_catalog'};
 }
 
 // ── Фото прайс-листа по узлам дерева услуг ─────────────────────────────────

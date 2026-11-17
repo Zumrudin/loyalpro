@@ -28,6 +28,7 @@ describe('ключи узлов', () => {
   test('parseKey разбирает свои ключи и отвергает мусор', () => {
     expect(pl.parseKey('c12')).toEqual({ kind: 'cat', id: 12 });
     expect(pl.parseKey('s7')).toEqual({ kind: 'sub', id: 7 });
+    expect(pl.parseKey('k8')).toEqual({ kind: 'local', id: 8 });
     expect(pl.parseKey('x1')).toBeNull();
     expect(pl.parseKey('c')).toBeNull();
     expect(pl.parseKey('')).toBeNull();
@@ -116,6 +117,19 @@ describe('resolvePhotos: подъём к родителю', () => {
       photos: [],
     });
     expect(pl.resolvePhotos('s1', idx2).photos).toEqual([]);
+  });
+});
+
+describe('единый локальный каталог',()=>{
+  test('строит k-ключи, наследует фото и принимает legacy alias',()=>{
+    const index=pl.buildLocalIndex({
+      categories:[{id:1,parent_id:null,title:'Косметология'},{id:2,parent_id:1,title:'Лицо'}],
+      photos:[{id:9,category_id:1,file_url:'/uploads/a.jpg',file_name:'a.jpg',mime_type:'image/jpeg'}],
+      aliases:[{legacy_key:'s77',category_id:2}],
+    });
+    expect(index.nodes.get('k2').path).toEqual(['Косметология','Лицо']);
+    expect(pl.resolvePhotos('k2',index)).toMatchObject({inheritedFrom:'k1',photos:[{id:9}]});
+    expect(pl.resolvePhotos('s77',index)).toMatchObject({node:{key:'k2'},inheritedFrom:'k1'});
   });
 });
 

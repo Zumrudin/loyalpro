@@ -9,18 +9,24 @@ const listServices = require('./tools/list-services');
 // Клиент часто называет мастера по имени → модель берёт его yc_id из list_staff,
 // минуя поле staff услуги. Поэтому и слоты, и бронь сверяем этой предпроверкой.
 //
-// Fail-open: если каталог недоступен/пуст или услуги нет в каталоге — возвращаем
+// Legacy only: если каталог недоступен/пуст или услуги нет в каталоге — возвращаем
 // unknown, и вызывающий НЕ блокирует (иначе при сбое YClients не пройдёт ни один
 // легитимный слот/бронь; выдуманный service_yc_id всё равно ловит create_booking).
 async function checkStaffPerformsService(salonId, serviceYcId, staffYcId) {
+  const policy = require('../service-catalog-policy');
+  const managed = await policy.load(salonId);
+  const local = managed.get(String(serviceYcId));
+  if (local && (!local.active || !local.staffIds.length)) {
+    return { unknown: false, ok: false, performers: [], staffList: [] };
+  }
   let catalog = null;
   try { catalog = await listServices.run(salonId); } catch (_) { catalog = null; }
   if (!catalog || !Array.isArray(catalog.services) || !catalog.services.length) {
-    return { unknown: true, ok: false, performers: [], staffList: [] };
+    return { unknown: !local, ok: false, performers: [], staffList: [] };
   }
   const svc = catalog.services.find(s => String(s.yc_id) === String(serviceYcId));
-  if (!svc) return { unknown: true, ok: false, performers: [], staffList: [] };
-  const staff = svc.staff || [];
+  if (!svc) return { unknown: !local, ok: false, performers: [], staffList: [] };
+  const staff = (svc.staff || []).filter(s => !local || local.staffIds.includes(Number(s.yc_id)));
   const ok = staff.some(m => String(m.yc_id) === String(staffYcId));
   return {
     ok, unknown: false,

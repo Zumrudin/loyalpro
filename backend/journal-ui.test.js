@@ -271,6 +271,13 @@ test('end time follows verified service duration', () => {
   const h=harness();h.get('jrTime').value='09:15';h.run('journal.duration=90');h.context.jrUpdateEndTime();
   expect(h.get('jrEndTime').value).toBe('10:45');expect(h.get('jrDuration').value).toBe('90 мин');
 });
+test('saved service duration does not change when current catalog settings change',()=>{
+ const h=harness();
+ h.run(`journal.data={services:[{id:7,yclientsId:70,duration:90,staffDetails:[{id:1,duration:120}]}]}`);
+ expect(h.context.jrServiceDuration({staffId:1,duration:30,services:[{id:70}]},{id:70})).toBe(30);
+ expect(h.context.jrServiceDuration({staffId:1,duration:60,services:[{id:70},{id:80}]},{id:70})).toBe(null);
+ expect(h.context.jrServiceDuration({staffId:1,duration:60,services:[{id:70},{id:80}]},{id:70,seance_length:900})).toBe(15);
+});
 
 test('all services renders nested local categories and keeps uncategorized services accessible', () => {
   const h = harness();
@@ -1976,4 +1983,13 @@ test('removing a confirmed payment reopens payment controls without making a req
  expect(h.get('jrModalBody').innerHTML).toContain('jrPayPartial');
  expect(h.run('journal.payment.data.due')).toBe(100);
  expect(h.context.jrApi).not.toHaveBeenCalled();
+});
+
+test('card add-service picker excludes unassigned and other-specialist services', () => {
+ const h = cardHarness();
+ h.run(`journal.data.services.push({id:71,yclientsId:901,title:'Other specialist',staffIds:[2]}, {id:72,yclientsId:902,title:'No assignment',staffIds:[]}); journal.session={recordId:8};`);
+ h.context.jrBindRecordEdit(CARD);
+ expect(h.get('jrCardQuick').innerHTML).toContain('Чистка');
+ expect(h.get('jrCardQuick').innerHTML).not.toContain('Other specialist');
+ expect(h.get('jrCardAll').innerHTML).not.toContain('No assignment');
 });

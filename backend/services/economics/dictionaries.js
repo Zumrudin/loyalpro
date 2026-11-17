@@ -1,12 +1,6 @@
 'use strict';
-// Справочники «Экономики» (GET /api/economics/dictionaries) — чистая склейка.
-// Услуги — из management-каталога /company/{cid}/services/ (ycGetServiceMeta,
-// кэш 10 мин): booking-каталог /services отдаёт только онлайн-записываемые
-// (у PERI активны 4 из 317), и правило оплаты/привязку аппарата на остальные
-// услуги выбрать было нельзя. Названия категорий — из /service_categories
-// (ycGetServiceCatalog, тот же кэш, что у отчёта); категория без названия —
-// «категория #id». Плюс услуги из записей за 12 мес. (нет в каталоге — удалена).
-// degraded: каталог YClients не ответил — фронт такой ответ не кэширует.
+// Current services/categories come from the settings catalog through catalog.js.
+// Historical-only service IDs are retained for existing accounting rules and reports.
 
 function buildDictionaries({ meta, catalog, staff, recentServices }) {
   const titles = (meta && meta.titleByService instanceof Map) ? meta.titleByService : new Map();

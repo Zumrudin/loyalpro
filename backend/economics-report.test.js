@@ -1,10 +1,10 @@
 'use strict';
 jest.mock('./services/economics/store', () => ({ loadPeriod: jest.fn() }));
-jest.mock('./services/yclients', () => ({ ycGetServiceMeta: jest.fn(), ycGetServiceCatalog: jest.fn() }));
+jest.mock('./services/economics/catalog', () => ({ loadCatalog: jest.fn() }));
 const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 jest.mock('./logger', () => ({ createLogger: () => mockLog }));
 const store = require('./services/economics/store');
-const yc = require('./services/yclients');
+const { loadCatalog } = require('./services/economics/catalog');
 const report = require('./services/economics/report');
 
 const SALON = { id: 1, yclients_company_id: '668791' };
@@ -29,8 +29,7 @@ function period() {
 beforeEach(() => {
   jest.clearAllMocks(); report.invalidate();
   store.loadPeriod.mockImplementation(async () => period());
-  yc.ycGetServiceMeta.mockResolvedValue({ durationByService: new Map([['10', 3600]]) });
-  yc.ycGetServiceCatalog.mockResolvedValue({ priced: [{ id: 10, title: 'S10 full', category_id: 100 }, { id: 11, title: 'S11', category_id: 100 }] });
+  loadCatalog.mockResolvedValue({ meta: { durationByService: new Map([['10', 3600]]), categoryByService: new Map([['10', 100]]), titleByService: new Map([['10', 'Settings title']]) } });
 });
 
 test('buildReport: строки, услуги, услуга×сотрудник, сводка; цена по приходу; постоянные за месяц целиком', async () => {
@@ -53,11 +52,9 @@ test('кэш 60 с на ключ salon+from+to; invalidate сбрасывает'
   await report.buildReport(SALON, '2026-09-01', '2026-09-30');
   expect(store.loadPeriod).toHaveBeenCalledTimes(2);
 });
-test('сбой каталога YClients не роняет отчёт (длительности/категории пустые)', async () => {
-  yc.ycGetServiceMeta.mockRejectedValue(new Error('429')); yc.ycGetServiceCatalog.mockRejectedValue(new Error('429'));
-  const r = await report.buildReport(SALON, '2026-09-01', '2026-09-30');
-  expect(r.rows[0].minutes).toBe(60);
-  expect(mockLog.warn).toHaveBeenCalled();
+test('local catalog failure does not produce a misleading payroll report', async () => {
+  loadCatalog.mockRejectedValue(new Error('database unavailable'));
+  await expect(report.buildReport(SALON, '2026-09-01', '2026-09-30')).rejects.toThrow('database unavailable');
 });
 test('serviceDetail: статьи, по сотрудникам, визиты; неизвестная услуга → null', async () => {
   const d = await report.serviceDetail(SALON, 10, '2026-09-01', '2026-09-30');
@@ -88,9 +85,8 @@ test('бонусы: выручка = cost_to_pay; бонус показан ка
   expect(d.service.first_cost).toBe(2000);
 });
 
-test('ревью: категория «инд.» услуги (нет в priced) берётся из management-каталога → категорийное правило оплаты матчится', async () => {
-  yc.ycGetServiceMeta.mockResolvedValue({ durationByService: new Map([['10', 3600]]), categoryByService: new Map([['10', 200]]) });
-  yc.ycGetServiceCatalog.mockResolvedValue({ priced: [] });
+test('ревью: категория «инд.» услуги (нет в priced) берётся из локального каталога → категорийное правило оплаты матчится', async () => {
+  loadCatalog.mockResolvedValue({ meta: { durationByService: new Map([['10', 3600]]), categoryByService: new Map([['10', 200]]), titleByService: new Map() } });
   store.loadPeriod.mockImplementation(async () => {
     const p = period();
     p.pay.schemes = [{ id: 7, lines: [{ percent: 50, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [200], services: [] }] }]; p.pay.assignments = [{ id: 1, staff_yc_id: 5, scheme_id: 7, valid_from: null, valid_to: null }];

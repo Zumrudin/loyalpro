@@ -1,188 +1,52 @@
 'use strict';
-
-// Общий загрузчик каталога услуг для трёх потребителей: инструмента
-// list_services (legacy-режим), блока «КАТАЛОГ УСЛУГ» в системном промпте
-// (AGENT_CATALOG_IN_PROMPT) и инструмента get_service_masters. Логика
-// фильтров видимости, deny-пар и дерева категорий — одна на всех.
-const { db } = require('../../db');
-const { ycGetServiceCatalog, ycGetServiceMeta } = require('../yclients');
+const serviceCatalog = require('../service-catalog');
 const settings = require('../agent-settings');
 const svcFilter = require('./service-filter');
-const categoryTree = require('./category-tree');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentCatalogData');
-
-// Обобщённые услуги, на которые промпт ОБЯЗЫВАЕТ записывать, когда пациент не
-// назвал препарат/филлер (правило «ПРЕПАРАТ/ФИЛЛЕР НЕ УТОЧНЯЕМ» в system-prompt.js).
-// В YClients они выключены (active=0) и попадают в каталог только явной галочкой
-// «включить из каталога» (allow-правило). Инцидент 2026-07-31: галочки не было,
-// модель не видела «Биоревитализацию» в каталоге и записала пациента на конкретный
-// препарат «Revi Silk 1 ml» — правило было невыполнимым, и это нигде не всплывало.
-// «Ботулинотерапия Ботулакс 1 ед» — тот же паттерн для зон: пациент не назвал
-// зону → запись на единицу Ботулакса, зоны и дозу определяет врач на визите
-// (инцидент 2026-07-31: запрос «записаться на ботокс» свёлся к консультации).
-// Цена этой услуги — за ОДНУ ЕДИНИЦУ препарата (370 ₽), а не за процедуру:
-// её маскирует блок каталога и инструмент get_service_masters (catalog-block.js
-// → isUnitPriceService). Литерал ОДИН на весь код — с ним же связан промпт
-// тестом на GENERIC_SERVICE_TITLES, и вторая копия молча разъехалась бы.
 const UNIT_PRICE_SERVICE_TITLE = 'Ботулинотерапия Ботулакс 1 ед';
 const GENERIC_SERVICE_TITLES = ['Биоревитализация', 'Увеличение губ', 'Контурная пластика', UNIT_PRICE_SERVICE_TITLE];
-const warnedMissing = new Set();   // один лог на процесс, а не на каждый ход диалога
-
-// Совпадение названия: после схлопывания пробелов — точное ИЛИ с техническим
-// хвостом в скобках. В YClients «Ботулакс» называется
-// «Ботулинотерапия  Ботулакс 1 ед ( 30 минут )» — двойной пробел и длительность.
-const normTitle = (t) => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
-function matchesGenericTitle(catalogTitle, genericTitle) {
-  const t = normTitle(catalogTitle);
-  const g = normTitle(genericTitle);
-  return t === g || (t.startsWith(g) && t.slice(g.length).trim().startsWith('('));
-}
-
+const warnedMissing = new Set();
+const normTitle = t => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
+function matchesGenericTitle(catalogTitle, genericTitle) { const t=normTitle(catalogTitle),g=normTitle(genericTitle);return t===g||(t.startsWith(g)&&t.slice(g.length).trim().startsWith('(')); }
 function warnMissingGenericServices(salonId, services) {
-  for (const title of GENERIC_SERVICE_TITLES) {
-    const key = `${salonId}:${title}`;
-    if (warnedMissing.has(key)) continue;
-    if (services.some(s => matchesGenericTitle(s.title, title))) continue;
-    warnedMissing.add(key);
-    logger.warn(`salon ${salonId}: обобщённой услуги «${title}» нет в каталоге агента — ` +
-      'правило «препарат не уточняем» невыполнимо, модель запишет на конкретный препарат. ' +
-      'Включи услугу в админке (Агент → услуги) или сними deny-правило.');
-  }
+ for (const title of GENERIC_SERVICE_TITLES) { const key=`${salonId}:${title}`;if(warnedMissing.has(key)||services.some(s=>matchesGenericTitle(s.title,title)))continue;warnedMissing.add(key);logger.warn(`salon ${salonId}: обобщённой услуги «${title}» нет в каталоге агента`); }
 }
-
-// → [{ yc_id, title, duration_min, price_min, price_max, category_path, staff:[{yc_id,name,price_min,price_max}] }]
+const numberOrNull=v=>v==null||v===''||!Number.isFinite(Number(v))?null:Number(v);
+function categoryPath(categories, categoryId) {
+ const byId=new Map((categories||[]).map(c=>[Number(c.id),c])),path=[],seen=new Set();let current=categoryId==null?null:Number(categoryId);
+ while(current!=null&&!seen.has(current)){seen.add(current);const row=byId.get(current);if(!row)break;path.push(row.title);current=row.parent_id==null?null:Number(row.parent_id);}
+ return path.reverse();
+}
+// Pure local-catalog DTO adapter: no HTTP, writes or legacy price/name fallback.
+function adaptCatalog(data, filter) {
+ const categories=data?.categories||[];
+ const activeStaff=new Map((data?.staffMembers||[]).filter(m=>m.is_active&&m.yclients_staff_id!=null).map(m=>[String(m.yclients_staff_id),m]));
+ return (data?.services||[]).flatMap(service=>{
+  const externalId=numberOrNull(service.yclients_id);
+  if(externalId==null||!service.linked||service.active!==true||service.assignmentsUnresolved||!svcFilter.decideOfferVisible(filter,externalId,true))return [];
+  const staff=(Array.isArray(service.staff)?service.staff:[]).flatMap(raw=>{
+   const externalStaffId=numberOrNull(raw?.id??raw),member=activeStaff.get(String(externalStaffId));
+   if(!member||!svcFilter.filterServiceStaff(filter,externalId,[externalStaffId]).length)return [];
+   const rawPrice=raw&&typeof raw==='object'?raw.price:null,rawDuration=raw&&typeof raw==='object'?numberOrNull(raw.seance_length):null;
+   const priceMin=rawPrice?.min==null?numberOrNull(service.price_min):numberOrNull(rawPrice.min);
+   const priceMax=rawPrice?.min==null?numberOrNull(service.price_max):(rawPrice.max==null?priceMin:numberOrNull(rawPrice.max));
+   const durationMin=rawDuration==null?numberOrNull(service.duration):Math.round(rawDuration/60);
+   if(!Number.isInteger(durationMin)||durationMin<=0)return [];
+   return [{yc_id:externalStaffId,name:member.name,price_min:priceMin,price_max:priceMax,duration_min:durationMin}];
+  });
+  if(!staff.length)return [];
+  const allPriced=staff.every(s=>s.price_min!=null);
+  const mins=staff.map(s=>s.price_min),maxs=staff.map(s=>s.price_max==null?s.price_min:s.price_max);
+  return [{local_id:Number(service.id),yc_id:externalId,title:service.title,duration_min:numberOrNull(service.duration),price_min:allPriced?Math.min(...mins):null,price_max:allPriced?Math.max(...maxs):null,category_id:service.category_id==null?null:Number(service.category_id),category_path:categoryPath(categories,service.category_id),staff}];
+ });
+}
 async function loadCatalogServices(salonId) {
-  // service_title/tag из админки — используем как фолбэк, если YClients недоступен.
-  const cfg = await db.any(
-    `SELECT yclients_service_id, service_title
-       FROM services_config WHERE salon_id = $1`,
-    [salonId]);
-
-  const salon = await db.one(
-    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
-       FROM salons WHERE id=$1`, [salonId]);
-
-  // Имена активных мастеров по yclients_staff_id — чтобы подставить в каждую услугу.
-  const staffRows = await db.any(
-    `SELECT yclients_staff_id, name
-       FROM staff_members
-      WHERE salon_id = $1 AND is_active = true`, [salonId]);
-  const staffNameById = new Map(staffRows.map(s => [String(s.yclients_staff_id), s.name]));
-
-  const filter = await settings.loadServiceFilterSafe(salonId);
-  // Оверлей-дерево подкатегорий (fail-open): для category_path каждой услуги.
-  const tree = await settings.loadCategoryTreeSafe(salonId);
-
-  // Достоверная привязка услуга→мастера строится per-staff запросами (поле staff
-  // в общем /services урезано). staffIdsByService: svcIdStr → Set(staffIdStr).
-  let priced = [], staffIdsByService = new Map();
-  let categories = [], durationByService = new Map(), staffPricesByService = new Map();
-  if (salon && salon.yclients_company_id) {
-    try {
-      const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
-      priced = cat.priced;
-      categories = cat.categories || [];
-      staffIdsByService = cat.staffIdsByService;
-    } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
-    // Длительность услуги (service-level): per-staff длительности в YClients нет.
-    // Оттуда же — ПЕРСОНАЛЬНЫЕ цены мастеров (svcIdStr → Map<staffIdStr,{price_min,price_max}>):
-    // цена процедуры отличается у врача и у главного врача, и только management-каталог
-    // их отдаёт. Мета недоступна → у всех останется базовая цена услуги (как и было).
-    const meta = await ycGetServiceMeta(salon).catch(() => null);
-    durationByService = (meta && meta.durationByService) || new Map();
-    staffPricesByService = (meta && meta.staffPricesByService) || new Map();
-  }
-
-  // Мастера, кто делает услугу: только активные, реально привязанные; минус deny-пары.
-  // У каждого — его цена за услугу (фолбэк на общий диапазон услуги, если per-staff нет).
-  const staffOf = (s) => {
-    const priceMap = staffPricesByService.get(String(s.id)) || new Map();
-    return svcFilter
-      .filterServiceStaff(filter, s.id, [...(staffIdsByService.get(String(s.id)) || new Set())])
-      .map(id => {
-        const name = staffNameById.get(String(id));
-        if (!name) return null;
-        // Ключ есть только у мастера с ПЕРСОНАЛЬНОЙ ценой; у остальных — базовая
-        // цена услуги целиком (обе границы), без смешивания с чужой.
-        const p = priceMap.get(String(id));
-        return {
-          // yc_id здесь избавляет от лишнего list_staff: слоты и бронь требуют
-          // id мастера, а раньше его приходилось добывать отдельным вызовом и
-          // сопоставлять по имени.
-          yc_id: Number(id),
-          name,
-          price_min: p ? p.price_min : s.price_min,
-          price_max: p ? p.price_max : s.price_max,
-        };
-      })
-      .filter(Boolean);
-  };
-
-  let services;
-  if (priced.length) {
-    // Индекс дерева категорий/подкатегорий для category_path каждой услуги.
-    const idx = categoryTree.indexTree(categories, tree.subcats, tree.placements);
-    services = priced
-      .filter(s => svcFilter.decideOfferVisible(filter, s.id, s.active === 1))
-      .map(s => {
-        const staff = staffOf(s);   // только реальные исполнители (минус deny-пары), с ценой каждого
-        const dur = durationByService.get(String(s.id));
-        return {
-          yc_id: s.id,
-          title: s.title,
-          duration_min: dur ? Math.round(dur / 60) : null,
-          // Диапазон цены — АГРЕГАТ по отфильтрованным мастерам, а НЕ сырой диапазон
-          // каталога YClients (тот включал бы «теневых» мастеров без реальной услуги).
-          price_min: staff.length ? Math.min(...staff.map(m => m.price_min)) : null,
-          price_max: staff.length ? Math.max(...staff.map(m => m.price_max)) : null,
-          // Путь категорий сверху вниз (направление → подкатегория) для ответов
-          // Милы про группу/направление услуг.
-          category_path: categoryTree.categoryPathForService(idx, s.id, s.category_id),
-          staff,
-        };
-      })
-      .filter(s => s.staff.length > 0);   // услуга без исполнителей после deny-пар не предлагается
-  } else {
-    // Нет живых данных (нет YClients-компании или API упал) → отдаём хотя бы заголовки из конфига.
-    services = cfg.map(c => ({
-      yc_id: c.yclients_service_id,
-      title: c.service_title,
-      duration_min: null,
-      price_min: null,
-      price_max: null,
-      category_path: [],
-      staff: [],
-    }));
-  }
-
-  warnMissingGenericServices(salonId, services);
-  return services;
+ const [data,filter]=await Promise.all([serviceCatalog.list(salonId),settings.loadServiceFilter(salonId)]);
+ const services=adaptCatalog(data,filter);warnMissingGenericServices(salonId,services);return services;
 }
-
-// Названия ТОП-категорий YClients (для блока прайс-листов: подкатегории свои
-// названия держат в БД, а направления — только в YClients). Набор мастеров тот
-// же, что в loadCatalogServices, поэтому в пределах TTL это попадание в кэш
-// ycGetServiceCatalog, а не лишний запрос в API.
-// ГОТЧА: попадание в кэш держится ТОЛЬКО на том, что loadCatalogServices (каталог
-// услуг в промпте) прогревает ycGetServiceCatalog ПРЯМО ПЕРЕД этим вызовом, а сама
-// она собирается лишь при включённом флаге AGENT_CATALOG_IN_PROMPT. Если флаг
-// выключить, кэш будет пуст и loadCategoryTitles на КАЖДОМ ходу пойдёт живым
-// запросом в YClients — тихая деградация, которую ничего не диагностирует.
 async function loadCategoryTitles(salonId) {
-  const salon = await db.oneOrNone(
-    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
-       FROM salons WHERE id=$1`, [salonId]);
-  if (!salon || !salon.yclients_company_id) return [];
-  const staffRows = await db.any(
-    `SELECT yclients_staff_id FROM staff_members
-      WHERE salon_id=$1 AND is_active = true`, [salonId]);
-  const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
-  return (cat.categories || []).map(c => ({ id: c.id, title: c.title }));
+ const data=await serviceCatalog.list(salonId);
+ return (data.categories||[]).map(c=>({id:Number(c.id),title:c.title,external_id:c.yclients_id==null?null:Number(c.yclients_id)}));
 }
-
-module.exports = {
-  loadCatalogServices, GENERIC_SERVICE_TITLES, UNIT_PRICE_SERVICE_TITLE,
-  warnMissingGenericServices, matchesGenericTitle,
-  loadCategoryTitles,
-};
+module.exports={adaptCatalog,categoryPath,loadCatalogServices,loadCategoryTitles,GENERIC_SERVICE_TITLES,UNIT_PRICE_SERVICE_TITLE,warnMissingGenericServices,matchesGenericTitle};

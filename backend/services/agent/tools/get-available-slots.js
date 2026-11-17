@@ -321,10 +321,15 @@ const EDGE_STEP_MIN = 15;
 // иначе fallback из графика с вычетом занятого оборудования. Вынесено из run(),
 // чтобы тем же кодом считать альтернативных мастеров при пустой выдаче.
 async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart, rec) {
+  const policy = require('../../service-catalog-policy');
+  const managed = await policy.load(salon.id);
+  let effective;
+  try { effective = serviceId ? policy.pair(managed, serviceId, staffId) : null; }
+  catch (_) { return { slots: [], staff_mismatch: true }; }
   // 1) Онлайн-запись включена и известна услуга → точные слоты под услугу.
   // Под ПЕРЕНОС многоуслужной записи (rec) онлайн-запись не годится: она
   // отдаёт старты под одну услугу — считаем по графику с длиной всей записи.
-  if (serviceId && !rec) {
+  if (serviceId && !rec && !effective) {
     const times = await ycGetBookTimes(salon, staffId, date, [serviceId]);
     const slots = (Array.isArray(times) ? times : []).map(t => ({
       time: t.time, datetime: t.datetime, seance_length: t.seance_length,
@@ -369,7 +374,7 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart
   let svcDurationMin = 0;
   if (serviceId) {
     const eqCtx = await eqContext.loadEquipmentContext(salon, date);
-    svcDurationMin = eqContext.durationMin(eqCtx, serviceId) || DEFAULT_DURATION_MIN;
+    svcDurationMin = effective?.duration || eqContext.durationMin(eqCtx, serviceId) || DEFAULT_DURATION_MIN;
     // Перенос записи: окно обязано вместить ВСЮ запись, и аппараты ВСЕХ её услуг.
     if (rec && rec.lenMin > svcDurationMin) svcDurationMin = rec.lenMin;
     const eqServices = rec ? [...new Set([Number(serviceId), ...rec.serviceIds])] : [serviceId];

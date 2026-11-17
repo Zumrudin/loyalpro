@@ -435,3 +435,16 @@ describe('get_sequential_slots — время пациента и плотнос
     expect(r.variants[0].offer_times).toBeUndefined();
   });
 });
+
+
+test('same specialist uses each service own effective duration in a chain', async () => {
+ listServices.run.mockResolvedValue({services:[
+  {yc_id:BIO,title:'Synthetic A',staff:[{...YULIA,duration_min:45}]},
+  {yc_id:CLEAN,title:'Synthetic B',staff:[{...YULIA,duration_min:20}]},
+ ]});
+ ycGetStaffSeances.mockResolvedValue(grid(600,780));
+ const out=await runTool({...baseInput,preferred_staff_yc_id:11});
+ const chain=out.variants[0].starts[0].chain;
+ expect(chain.map(s=>s.seance_length)).toEqual([2700,1200]);
+ expect(chain[1].datetime).toBe(`${DATE}T10:45:00+03:00`);
+});

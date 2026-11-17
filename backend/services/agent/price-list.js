@@ -30,11 +30,21 @@ function cell(v, maxLen) {
 
 const catKey = (id) => `c${Number(id)}`;
 const subKey = (id) => `s${Number(id)}`;
+const localKey = (id) => `k${Number(id)}`;
 
 function parseKey(key) {
-  const m = /^([cs])(\d+)$/.exec(String(key == null ? '' : key).trim());
+  const m = /^([csk])(\d+)$/.exec(String(key == null ? '' : key).trim());
   if (!m) return null;
-  return { kind: m[1] === 'c' ? 'cat' : 'sub', id: Number(m[2]) };
+  return { kind: m[1] === 'c' ? 'cat' : m[1] === 's' ? 'sub' : 'local', id: Number(m[2]) };
+}
+
+function buildLocalIndex({categories,photos,aliases,priceListUrl}={}){
+ const nodes=new Map();
+ for(const c of categories||[]){if(c==null||c.id==null)continue;const key=localKey(c.id);nodes.set(key,{key,title:cell(c.title,80),parentKey:c.parent_id==null?null:localKey(c.parent_id),path:null,photos:[]});}
+ for(const node of nodes.values()){const chain=[],seen=new Set();let cur=node;while(cur&&!seen.has(cur.key)){seen.add(cur.key);chain.push(cur.title);cur=cur.parentKey?nodes.get(cur.parentKey):null;}node.path=chain.reverse();}
+ for(const p of photos||[]){const node=nodes.get(localKey(p.category_id));if(node)node.photos.push({id:p.id,fileUrl:p.file_url,fileName:p.file_name,mimeType:p.mime_type});}
+ const aliasMap=new Map();for(const a of aliases||[]){const target=localKey(a.category_id);if(nodes.has(target))aliasMap.set(String(a.legacy_key),target);}
+ return {nodes,aliases:aliasMap,priceListUrl:priceListUrl||null};
 }
 
 // { categories:[{id,title}], subcats:[{id,yc_category_id,parent_id,title}],
@@ -93,7 +103,9 @@ function buildIndex({ categories, subcats, photos, priceListUrl } = {}) {
 function resolvePhotos(key, index) {
   const nodes = index && index.nodes;
   if (!nodes) return null;
-  const node = nodes.get(String(key == null ? '' : key).trim());
+  const requested=String(key == null ? '' : key).trim();
+  const canonical=index&&index.aliases&&index.aliases.get(requested)||requested;
+  const node = nodes.get(canonical);
   if (!node) return null;
   const seen = new Set();
   let cur = node;
@@ -119,7 +131,7 @@ function renderPriceListBlock(index) {
     .filter(n => n.photos.length && parseKey(n.key))
     .sort((a, b) => {
       const ka = parseKey(a.key), kb = parseKey(b.key);
-      if (ka.kind !== kb.kind) return ka.kind === 'cat' ? -1 : 1;
+      if (ka.kind !== kb.kind) return ({cat:0,sub:1,local:2}[ka.kind]-{cat:0,sub:1,local:2}[kb.kind]);
       return ka.id - kb.id;
     });
   const url = index && index.priceListUrl;
@@ -148,7 +160,7 @@ function photoFailureText(url) {
 }
 
 module.exports = {
-  catKey, subKey, parseKey, buildIndex, resolvePhotos, renderPriceListBlock,
+  catKey, subKey, localKey, parseKey, buildIndex, buildLocalIndex, resolvePhotos, renderPriceListBlock,
   photoFailureText,
   MAX_PHOTOS_PER_TURN,
 };

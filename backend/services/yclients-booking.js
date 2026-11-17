@@ -87,7 +87,21 @@ async function ycCreateRecord(salon, {
   // ВЫКЛЮЧЕННОЙ онлайн-записи слоты приходят из графика (management /timetable)
   // без длительности, поэтому берём её детерминированно из меты услуги
   // (duration, сек) — не полагаясь на то, что слот её принёс.
+  const policy = require('./service-catalog-policy');
+  const managed = await policy.load(salon.id);
+  await policy.verifyExternal(salon, staffYcId, serviceYcIds || [], managed);
+  const effective = (serviceYcIds || []).map(id => policy.pair(managed, id, staffYcId));
   let sl = Number(seanceLength) || 0;
+  if (effective.some(Boolean)) {
+    const source = effective.every(Boolean) ? [] : await ycGet(salon, `/company/${salon.yclients_company_id}/services/`, {}).catch(() => null);
+    sl = effective.reduce((sum, local, index) => {
+      const external = Array.isArray(source) ? source.find(s => Number(s.id) === Number(serviceYcIds[index])) : null;
+      const staff = external?.staff?.find(s => Number(s.id) === Number(staffYcId));
+      const duration = local ? local.duration * 60 : Number(staff?.seance_length ?? external?.duration);
+      if (!(duration > 0)) throw new Error('Не удалось определить длительность всех услуг. Обновите каталог.');
+      return sum + duration;
+    }, 0);
+  }
   if (!sl) {
     const meta = await ycGetServiceMeta(salon).catch(() => null);
     const first = (serviceYcIds || [])[0];
@@ -95,7 +109,7 @@ async function ycCreateRecord(salon, {
   }
   const body = {
     staff_id: staffYcId,
-    services: (serviceYcIds || []).map(id => ({ id })),
+    services: (serviceYcIds || []).map((id, i) => ({ id, ...(effective[i]?.priceMin == null ? {} : { cost: effective[i].priceMin }) })),
     client: { phone: clientPhone, name: clientName || '' },
     datetime,
     seance_length: sl || seanceLength,

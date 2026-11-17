@@ -1,5 +1,10 @@
 'use strict';
 
+// Legacy fixtures have not migrated local service assignments.
+jest.mock('./services/service-catalog-policy', () => ({
+  ...jest.requireActual('./services/service-catalog-policy'), load: jest.fn(async () => new Map()),
+}));
+
 jest.mock('./services/yclients', () => ({
   ycGet: jest.fn(),
   ycPost: jest.fn(),
@@ -97,4 +102,43 @@ describe('ycCreateRecord', () => {
     expect(passedSalon.yclients_company_id).toBe(100);           // остальное от салона
     expect(path).toBe('/records/100');
   });
+});
+
+describe('managed local service assignments', () => {
+  const policy = require('./services/service-catalog-policy');
+  afterEach(() => policy.load.mockResolvedValue(new Map()));
+  const managed = () => new Map([['7', { active: true, staffDetails: [{ id: 55, duration: 45, priceMin: 0 }] }]]);
+  test('freshly verifies external pair and sends current local duration and zero price', async () => {
+    policy.load.mockResolvedValue(managed());
+    ycGet.mockResolvedValue([{ id: 7 }]);
+    ycPost.mockResolvedValue({ id: 999 });
+    await yb.ycCreateRecord(salon, { staffYcId: 55, serviceYcIds: [7], seanceLength: 1800, datetime: '2030-01-01T12:00:00+03:00' });
+    expect(ycPost).toHaveBeenCalledWith(expect.anything(), '/records/100', expect.objectContaining({ services: [{ id: 7, cost: 0 }], seance_length: 2700 }));
+  });
+  test('removed local assignment blocks final create even with cached slot evidence', async () => {
+    policy.load.mockResolvedValue(new Map([['7', { active: true, staffDetails: [] }]]));
+    await expect(yb.ycCreateRecord(salon, { staffYcId: 55, serviceYcIds: [7], seanceLength: 1800 })).rejects.toThrow(/назначена/);
+    expect(ycPost).not.toHaveBeenCalled();
+  });
+  test('upstream pair removed after offer blocks final create', async () => {
+    policy.load.mockResolvedValue(managed());
+    ycGet.mockResolvedValue([]);
+    await expect(yb.ycCreateRecord(salon, { staffYcId: 55, serviceYcIds: [7] })).rejects.toThrow(/не подтверждено/);
+    expect(ycPost).not.toHaveBeenCalled();
+  });
+});
+
+
+test('mixed local and external services sum staff-specific durations; unknown duration blocks write', async () => {
+ const policy = require('./services/service-catalog-policy');
+ policy.load.mockResolvedValue(new Map([['7', {active:true, staffDetails:[{id:55,duration:45,priceMin:0}]}]]));
+ ycGet.mockImplementation(async (_, path) => path.includes('/company/') ? [{id:8,duration:600,staff:[{id:55,seance_length:1800}]}] : [{id:7}]);
+ try {
+  await yb.ycCreateRecord(salon,{staffYcId:55,serviceYcIds:[7,8],seanceLength:600});
+  expect(ycPost).toHaveBeenCalledWith(expect.anything(),expect.anything(),expect.objectContaining({seance_length:4500}));
+  ycPost.mockClear();
+  ycGet.mockImplementation(async (_, path) => path.includes('/company/') ? [] : [{id:7}]);
+  await expect(yb.ycCreateRecord(salon,{staffYcId:55,serviceYcIds:[7,8],seanceLength:600})).rejects.toThrow(/длительность/);
+  expect(ycPost).not.toHaveBeenCalled();
+ } finally { policy.load.mockResolvedValue(new Map()); }
 });
