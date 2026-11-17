@@ -1,6 +1,6 @@
 # Мила: единый каталог настроек и прайс-картинки категорий
 
-Статус: реализация закоммичена и опубликована в dev; dev-релиз и перенос прайсов завершены, проверки пройдены. Production не обновлялся. Основание — запрос владельца после объединения каталога экономики и журнала. Связанный контракт: `../specs/2026-11-17-service-staff-settings.md`.
+Статус: реализация опубликована и выложена на dev и production; импорт каталога, назначения и перенос прайсов завершены, проверки пройдены. Основание — запрос владельца после объединения каталога экономики и журнала. Связанный контракт: `../specs/2026-11-17-service-staff-settings.md`.
 
 ## Результат для пользователя
 
@@ -138,3 +138,16 @@ S — изолированная задача; M — несколько функ
 - PM2 online, cwd нового release проверен, restarts0; ecosystem и PM2 сохранены. В новых логах ERROR/fatal/UnhandledPromiseRejection/MaxListeners0.
 - Проверки самого candidate: Chromium synthetic UI PASS, PostgreSQL temporary-table transfer12 PASS. Предвыкладочный regression50 suites/1583 PASS.
 - Артефакты `/tmp/loyalpro-mila-dev/verification.json`, backup deployment metadata и оригинальный SHA256 manifest. Известная отдельная проблема маршрута LLM (`INSUFFICIENT_BALANCE` из предыдущего прогона) этой выкладкой не исправлялась; model routing не менялся. Приёмка каталога и прайсов не означает успешную генерацию на неисправном маршруте LLM.
+
+## Production выложен — 17.11.2026
+
+Владелец явно разрешил commit/push и production rollout. Оптимизация скорости не входит в release: предшествующая диагностика не меняла код.
+
+- Release /srv/loyalpro/releases/mila-catalog-20261117; current переключён, rollback auth-tenant-20261117. Feature source 5b4c433, snapshot cba76d9: 1013 backend/frontend files SHA256 verified. Package-lock совпал, сохранены прежние dependencies, env, shared data/logs/uploads и private gateway transport. Права release приведены к loyalpro.
+- Backup /srv/loyalpro-backups/pre-mila-catalog-20261117: dump 13 525 149 байт / 1308 catalog entries, env/nginx/ecosystem/PM2 и metadata. pg_restore --list PASS. Additive schema применена при остановленном приложении, lock_timeout5s/statement_timeout30s; rollback handler возвращает прежний release при ошибке.
+- Production catalog был пуст. Импорт Yclients: 272 услуги, 21 категория; внешние записи не изменялись. Свежая сверка: 269 услуг / 637 назначений; 593 назначения неактивных сотрудников исключены. Три услуги с нулевой длительностью оставлены без применения сверки. Run 9d0e54bd-2f01-44e4-a959-3debd855d850. Все 269 target DTO проверены: базовые/персональные цены, длительности, назначения и initialization.
+- Перенесены19 подкатегорий и33 photo references, placements0. Оригиналы уже присутствовали в production shared uploads. Проверены33/33 aliases/URL/order и прежние ключи; 22 уникальных файла проверены HTTPS/SHA256. Старые строки/файлы сохранены.
+- Live API с действующей owner-сессией: 272 услуги и33 фото. Anonymous catalog401. Шесть frontend assets byte-match. Мила читает248 доступных услуг из нового каталога.
+- Chromium на production с реальными auth/catalog/photo API: 272 услуги, 2 загруженных изображения выбранной категории, диалог390px без переполнения, pageErrors0. Прочие API изолированы; полный пользовательский E2E не заявляется.
+- PM2 online, фактический cwd нового release, restarts41 стабилен (накопительный счётчик). В новом участке логов ERROR/fatal/UnhandledPromiseRejection/MaxListeners0. PM2 сохранён.
+- Артефакты: /tmp/loyalpro-mila-prod/ локально, /tmp/mila-prod-verification.json и backup deployment.json на production. Предрелизные50 suites/1583 tests PASS на том же feature-коде. Полный suite, реальные сообщения/booking/payment/bonus в production не запускались. Маршрутизация LLM не менялась.

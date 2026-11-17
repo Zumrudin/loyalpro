@@ -179,3 +179,8 @@ T12 завершена для dev. Production-выкладка не входит
 Проверки точного кандидата из backend: `JWT_SECRET=<synthetic-test-key> npx jest --runInBand --silent economics service-catalog service-assignments journal-service journal-record-edit journal-sources journal-sessions journal-ui` — **24 suites / 729 tests PASS**. Первый запуск без тестового JWT_SECRET остановился на защите конфигурации; повтор с синтетическим ключом прошёл. `node --test frontend/js/pages/economics-table.test.js` — **35 PASS**. Chromium: `journal-assignments-ui-e2e.js`, `service-catalog-ui-e2e.js` PASS; отдельный synthetic сценарий экономики проверил вкладку, ссылку к настройкам и пустой отчёт. Реальные записи, сообщения, оплаты не создавались.
 
 Dev обновлён в рамках продолжающейся разрешённой выкладки раздела услуг: `/srv/loyalpro-dev/releases/unified-services-20261117`, rollback `/srv/loyalpro-dev/releases/service-staff-20261117`, config/PM2 backup `/srv/loyalpro-dev/backups/pre-unified-services-20261117`. Схема и данные не менялись. SHA256 manifest 1005 исходных файлов проверен; фактический PM2 cwd/online/restarts0, HTTPS four-assets byte-match, anonymous catalog/economics/journal401. Read-only реальные сервисы экономики и журнала читают по 272 услуги из общего каталога; unlinked0. Runtime ERROR/fatal/MaxListeners/UnhandledPromiseRejection0. PM2 и ecosystem сохранены. Полный Jest и авторизованный browser E2E с живым API не запускались. Production не менялся.
+
+
+## Production — 17.11.2026
+
+По разрешению владельца выложен release mila-catalog-20261117: импорт272 услуг, сверка269 услуг/637 назначений, 3 исключения нулевой длительности. Все target DTO проверены. Backup, rollback и приёмка описаны в плане 2026-11-17-mila-unified-catalog-price-images.md, раздел Production.
