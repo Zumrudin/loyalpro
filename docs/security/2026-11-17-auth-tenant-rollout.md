@@ -1,6 +1,21 @@
 # Выкладка исправлений A1–A5
 
-Этот документ — инструкция; не запись о выполненной выкладке. Существующий production-релиз не изменён локальной реализацией.
+Dev-выкладка выполнена; результат ниже. Production остаётся на прежнем выпуске `3c8798b`.
+
+## Выполнено на dev — 17.11.2026
+
+- 05:37:51.353 UTC: release `/srv/loyalpro-dev/releases/auth-tenant-20261117`, source `0d3c6b8`; PM2 entry пересоздан с новым script/cwd и сохранён. Фактический `/proc/PID/cwd`, Node22.23.2, online/restarts0 и bind127.0.0.1:3001 проверены.
+- Backup `/srv/loyalpro-dev/backups/pre-auth-tenant-20261117`: dump loyalpro_test 12,196,074 bytes, pg_restore --list 1313 entries; env, ecosystem, PM2 dump, два nginx vhost. Предыдущий release `/srv/loyalpro-dev/releases/security-completion-20261116` сохранён.
+- PostgreSQL MCP: все четыре агрегата home-care audit = 0 до и после выкладки. Новые три FK применены и VALIDATED одной транзакцией с lock/statement 5/30s, 34ms. Данные не очищались/не перепривязывались.
+- Nginx: `/etc/nginx/sites-available/dev-zumrudin.conf` и `loyalpro-main.conf` (резервный IP vhost) закрывают gateway raw URL; `nginx -t` и reload успешны. Production gateway-files relay на loopback3103 не изменён. Backend/Frontend используют прежние dev env/data/logs/uploads, секреты не ротировались.
+- На чистом candidate до копирования env: npm ci, 18 focused Jest suites / 343 tests PASS, затем production dependency prune. Все 986 проверенных backend/frontend source files совпали с commit. HTTPS index и обе изменённые JS byte-match, CSP сохранён.
+- HTTP: index200; anonymous clients/attachment/SSE/mobile profile401; raw, percent-encoded и dot-path gateway uploads404; IP-vhost raw404.
+- 16 live checks через actual backend с двумя синтетическими салонами: свой POST/read, specialist same-tenant read, foreign read/POST/PUT denial и отсутствие изменения строки, must_change_password me200/protected403, revoked session401; свой файл200, чужой404, specialist403, raw/encoded404. Бот/FCM и внешние сообщения не использовались; у synthetic client нет FCM token.
+- Browser MCP: фактические deployed chat/journal scripts и действующий synthetic staff token открыли настоящий синтетический dev attachment через Bearer→Blob; opener=null, без токена отказ, page errors0. HTML fixture для двух компонентов перехвачен в браузере; это не проверка всех экранов приложения.
+- Cleanup: synthetic users/salons/messages удалены, агрегаты PostgreSQL MCP residue0; файл и созданные пустые каталоги удалены. Новые runtime ERROR/fatal/MaxListeners0. Полный Jest, живой OTP, реальные пациентские сообщения/записи и CLI сброс реального пользователя не запускались.
+- Артефакты проверки (private0700): `/tmp/loyalpro-auth-tenant-dev/`; live fixture script и browser hook содержат только синтетические сценарии, временный файл с сессией удалён.
+
+Для будущего production rollout отдельно проверить физическое расположение gateway-файлов и возможный reverse-tunnel/alias: положительный dev download не доказывает доступ нового backend route к production-хранилищу. Защитные nginx правила и приложение должны выпускаться согласованно.
 
 ## До переключения
 
