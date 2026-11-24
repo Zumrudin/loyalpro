@@ -141,6 +141,8 @@ async function createBookingRecord(salonId, draft) {
        ON CONFLICT (salon_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
       [salonId, dialogKey, JSON.stringify({ record_id: recordId, staffYcId, serviceYcId, datetime }), idem]);
     await client.query('COMMIT');
+    const folders = require('../paper-folders');
+    await folders.safely(() => folders.bookingCreated(salonId, record?.client?.id, datetime));
     return { created: true, record_id: recordId };
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) { /* соединение уже мертво */ }

@@ -55,7 +55,7 @@ function jrClose(force) {
 }
 function jrCreateClientPanel() {
   return `<aside class="jr-booking-client jr-booking-panel jr-create-client"><div class="jr-fields">
-    <label>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label>
+    <label ${jrCanOpenClientCard() ? '' : 'hidden'}>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label>
     <button type="button" class="btn btn-sec" id="jrClearClient" hidden>Другой / новый клиент</button>
     <label>Фамилия<input id="jrSurname" maxlength="60" autocomplete="off" placeholder="Фамилия"></label>
     <label>Имя<input id="jrName" required maxlength="120" autocomplete="off" placeholder="Имя"></label>
@@ -64,9 +64,14 @@ function jrCreateClientPanel() {
     <label>Email<input id="jrEmail" type="email" readonly placeholder="Из карточки выбранного клиента"><small>Редактирование — в разделе «Клиенты»</small></label>
     </div><label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя <small>Скоро</small></label>
     <label class="jr-notify"><input type="checkbox" id="jrCreateNoNotify"> Не уведомлять клиента</label>
-    <div id="jrClientSummary" class="jr-hint"></div><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></aside>`;
+    <div id="jrClientSummary" class="jr-hint"></div><h4 id="jrClientsTitle" ${jrCanOpenClientCard() ? '' : 'hidden'}>Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></aside>`;
 }
 async function jrLoadClients(query = '', onPick = jrSelectClient) {
+  if (!jrCanEditJournal()) return false;
+  if (!jrCanOpenClientCard()) {
+    jrEl('jrClientResults').innerHTML = '<p class="jr-hint">Введите данные клиента вручную.</p>';
+    return;
+  }
   const modal = journal.modalRequest;
   const request = journal.clientRequest = (journal.clientRequest || 0) + 1;
   jrEl('jrClientResults').textContent = 'Загрузка…';
@@ -207,6 +212,7 @@ function jrUpdateEndTime() {
   jrEl('jrEndTime').value = time && journal.duration ? jrTimeLabel(jrMinutes(time) + journal.duration) : '—';
 }
 function jrForm(record, preset = {}) {
+  if (!jrCanEditJournal()) return false;
   if (!journal.data) return;
   journal.modalRequest++; journal.slotRequest++;
   journal.slots = []; journal.duration = null; journal.selectedClient = null; journal.lines = {}; journal.payAfterCreate = null;
@@ -286,6 +292,7 @@ function jrFormDraft(record) {
   return draft;
 }
 async function jrFindSlots() {
+  if (!jrCanEditJournal()) return false;
   const request = ++journal.slotRequest;
   const params = { date: jrEl('jrFormDate').value, staffId: jrEl('jrStaff').value };
   if (journal.draft.recordId) params.recordId = journal.draft.recordId;
@@ -310,6 +317,7 @@ async function jrFindSlots() {
   } catch (e) { if (request === journal.slotRequest) { jrEl('jrSlotInfo').textContent = ''; jrMessage(e.message); } }
 }
 async function jrCreateWithPayment(draft, preferred) {
+  if (!jrCanEditJournal()) return false;
   const session = journal.session;
   if (!session) return;
   let options = null;

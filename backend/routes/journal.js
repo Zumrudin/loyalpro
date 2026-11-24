@@ -14,13 +14,20 @@ const visitHistory = require('../services/journal/visit-history');
 const clientLoyalty = require('../services/journal/client-loyalty');
 const staffSchedule = require('../services/journal/staff-schedule');
 const daySummary = require('../services/journal/day-summary');
-router.use(auth, requireRole('owner', 'admin'));
+const access = require('../services/journal/access');
+router.use(auth, requireRole('owner', 'admin', 'admin_cashier', 'specialist'));
+router.use((req, res, next) => {
+  if (!access.allowed(req.user.role, req.method, req.path || req.url)) {
+    return res.status(403).json({ error: 'Доступен только просмотр журнала' });
+  }
+  next();
+});
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 const handle = fn => async (req, res) => {
-  try { res.json(await fn(req)); }
+  try { res.json(access.present(await fn(req), req.user.role)); }
   catch (e) {
     // Never return upstream messages (they can contain client data / credentials).
-    if (e instanceof m.JournalError) return res.status(e.status).json({ error: e.message, code: e.code });
+    if (e instanceof m.JournalError) return res.status(e.status).json(access.present({ error: e.message, code: e.code }, req.user.role));
     res.status(502).json({ error: 'Не удалось загрузить данные. Обновите журнал.', code: 'unavailable' });
   }
 };
@@ -42,8 +49,8 @@ router.post('/sessions/validate', handle(async req => {
 // Saved locally only: YClients is updated by «Отправить в YClients» (dispatch).
 router.post('/sessions', handle(req => sessions.enqueue(req.user.salonId, req.user.userId || req.user.id, sessions.parseSession(req.body))));
 // Saved locally only; explicit dispatch executes the stored full-day snapshot.
-router.get('/staff-schedule/changes', handle(req => staffSchedule.changes(req.user.salonId)));
-for (const action of ['retry', 'dismiss']) router.post('/staff-schedule/:id/' + action, handle(req =>
+router.get('/staff-schedule/changes', requireRole('owner', 'admin'), handle(req => staffSchedule.changes(req.user.salonId)));
+for (const action of ['retry', 'dismiss']) router.post('/staff-schedule/:id/' + action, requireRole('owner', 'admin'), handle(req =>
   staffSchedule.recover(req.user.salonId, m.positiveId(req.params.id), action)));
 router.post('/staff-schedule', requireRole('owner', 'admin'), handle(req => staffSchedule.enqueue(
   req.user.salonId, req.user.userId || req.user.id, staffSchedule.parse(req.body))));

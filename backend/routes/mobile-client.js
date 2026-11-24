@@ -213,9 +213,12 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
     }
 
     await db.query(
-      `UPDATE records SET status='no_show', updated_at=NOW() WHERE id=$1 AND client_id=$2 AND salon_id=$3`,
+      `UPDATE records SET status='no_show', raw_payload=COALESCE(raw_payload,'{}'::jsonb) || '{"attendance":-1}'::jsonb, updated_at=NOW() WHERE id=$1 AND client_id=$2 AND salon_id=$3`,
       [booking.id, clientId, req.client.salonId],
     );
+
+    await require('../services/paper-folders').safely(() =>
+      require('../services/paper-folders').reconcile(req.client.salonId, clientId));
 
     logger.info(`cancel bookingId=${bookingId} salonId=${req.client.salonId} ok`);
 
@@ -289,9 +292,12 @@ router.post('/bookings/:bookingId/confirm', mobileAuth, async (req, res) => {
     }
 
     await db.query(
-      `UPDATE records SET status='confirmed', updated_at=NOW() WHERE id=$1 AND client_id=$2 AND salon_id=$3`,
+      `UPDATE records SET status='confirmed', raw_payload=COALESCE(raw_payload,'{}'::jsonb) || '{"attendance":2}'::jsonb, updated_at=NOW() WHERE id=$1 AND client_id=$2 AND salon_id=$3`,
       [booking.id, clientId, req.client.salonId],
     );
+
+    await require('../services/paper-folders').safely(() =>
+      require('../services/paper-folders').reconcile(req.client.salonId, clientId));
 
     logger.info(`confirm bookingId=${bookingId} salonId=${req.client.salonId} ok`);
 

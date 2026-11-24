@@ -22,6 +22,7 @@ function jrExtraFields(r) {
 }
 // One field of the card's session edit; enables «Сохранить изменения».
 function jrCardEdit(key, value) {
+  if (!jrCanEditJournal()) return false;
   if (!journal.session) return;
   journal.session.edit ||= {};
   journal.session.edit[key] = value;
@@ -30,6 +31,7 @@ function jrCardEdit(key, value) {
   if (jrEl('jrCancel')) jrEl('jrCancel').disabled = true;
 }
 function jrDeleteRecord(r) {
+  if (!jrCanEditJournal()) return false;
   // Unsaved card edits are not sent with a deletion (the server refuses
   // [edit, delete]): ask first, as «Записать повторно» and closing do.
   const kind = journal.session?.edit ? jrUnsavedKind() : null;
@@ -44,6 +46,7 @@ function jrDeleteRecord(r) {
 }
 // «Записать повторно»: the same client and services, the date is chosen anew.
 function jrRebook(r) {
+  if (!jrCanEditJournal()) return false;
   // Unsaved card edits are not dropped silently: ask first, as on close.
   const kind = journal.session?.edit ? jrUnsavedKind() : null;
   if (kind) return jrAskClose(kind);
@@ -89,13 +92,14 @@ function jrTools(record, card = false) {
     .map(([title, icon]) => jrTile(title, icon, ids[title])).join('')}</div>${live ? '<div id="jrHistory" class="jr-history-box" hidden></div>' : ''}`;
 }
 function jrPhoneHtml(r) {
+  if (!jrCanViewPhones() || r?.capabilities?.canViewPhones === false) return '';
   const digits = String(r?.clientPhone || '').replace(/\D/g, '');
   if (!digits) return '<p class="jr-hint">Телефон не указан</p>';
   const tel = '+' + digits;
   return `<p class="jr-client-phone"><a href="tel:${jrEscape(tel)}">${jrEscape(jrPhonePretty(digits))}</a><button type="button" class="jr-icon-btn" id="jrCopyPhone" data-phone="${jrEscape(tel)}" title="Копировать телефон" aria-label="Копировать телефон">${jrIcon('copy')}</button></p>`;
 }
 function jrClientPanel(record, creating = false, editable = false) {
-  const canSwap = !creating && editable && record && jrCanReshape(record);
+  const canSwap = jrCanOpenClientCard() && !creating && editable && record && jrCanReshape(record);
   const name = jrEscape(record?.clientName || 'Клиент');
   return `<aside class="jr-booking-client jr-booking-panel">${canSwap
       ? `<button type="button" class="jr-back-link" id="jrChangeClient">${jrIcon('back')}Сменить клиента</button><div id="jrChangeClientBox" class="jr-fields jr-change-client" hidden><label>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></div>`
@@ -104,9 +108,9 @@ function jrClientPanel(record, creating = false, editable = false) {
       ? '<div class="jr-client-tabs" role="tablist"><button type="button" role="tab" class="jr-tab is-active" id="jrTabClient" aria-selected="true">Клиент</button><button type="button" role="tab" class="jr-tab" id="jrTabChat" aria-selected="false">Чат</button></div><div id="jrChatPane" class="jr-chat-pane" hidden></div><div id="jrClientPane">'
       : `<div class="jr-client-tabs"><span class="is-active">Клиент</span>${jrStub('Чат','chat','jr-tab-stub')}</div><div>`}${creating
     ? '<div class="jr-fields"><label>Имя клиента<input id="jrName" required maxlength="120" autocomplete="off" placeholder="Имя и фамилия"></label><label>Телефон с кодом страны<input id="jrPhone" required type="tel" maxlength="24" autocomplete="off" placeholder="Введите номер телефона"></label></div>'
-    : `<div class="jr-client-head"><div class="jr-client-identity">${editable && record
+    : `<div class="jr-client-head"><div class="jr-client-identity">${editable && record && jrCanOpenClientCard()
       ? `<button type="button" class="jr-client-link" id="jrClientLink" title="Открыть карточку клиента"><span id="jrClientName">${name}</span></button>`
-      : `<h3 id="jrClientName">${name}</h3>`}</div><div class="jr-client-acts">${editable && record ? `<button type="button" class="jr-icon-btn" id="jrClientIcon" title="Карточка клиента" aria-label="Карточка клиента">${jrIcon('user')}</button>` : ''}<button type="button" class="jr-icon-btn jr-placeholder" disabled title="Другие действия — скоро появятся в журнале" aria-label="Другие действия">${jrIcon('dots')}</button></div></div>${editable ? jrPhoneHtml(record) : ''}`}
+      : `<h3 id="jrClientName">${name}</h3>`}</div><div class="jr-client-acts">${editable && record && jrCanOpenClientCard() ? `<button type="button" class="jr-icon-btn" id="jrClientIcon" title="Карточка клиента" aria-label="Карточка клиента">${jrIcon('user')}</button>` : ''}<button type="button" class="jr-icon-btn jr-placeholder" disabled title="Другие действия — скоро появятся в журнале" aria-label="Другие действия">${jrIcon('dots')}</button></div></div>${editable ? jrPhoneHtml(record) : ''}`}
     <div class="jr-client-tools">${[['Планы лечения','folder'],['Медкарта','medcard'],['История посещений','clock'],['Лояльность','loyalty'],['Счета клиента','wallet']].map(([title, icon]) => {
       const live = !creating && editable && record && { 'Планы лечения': 'jrTreatmentPlansOpen', 'Медкарта': 'jrMedicalCardOpen', 'История посещений': 'jrVisitsOpen', 'Лояльность': 'jrLoyaltyOpen', 'Счета клиента': 'jrClientAccountsOpen' }[title];
       return jrTile(title, icon, live || null);
@@ -193,14 +197,24 @@ function jrSyncAlert(record) {
 // A record whose changes are only saved locally stays editable (also a new
 // record not yet in YClients); a package on its way or failed locks it.
 const jrLocked = record => jrSyncing(record) || record.sync?.status === 'failed';
-const jrCanChange = record => !record.deleted && !record.paid && !jrLocked(record);
+const jrCanChange = record => jrCanEditJournal() && !record.deleted && !record.paid && !jrLocked(record);
 // Duration, client and deletion additionally exclude an arrived visit (spec §4.1).
 const jrCanReshape = record => jrCanChange(record) && record.attendance !== 1;
 // A new record saved only in the journal is deleted locally whatever its status
 // and payments: nothing about it has left LoyalPro (sessions.deleteUnsent).
-const jrCanDeleteUnsent = record => !record.deleted && Number(record.id) < 0 && jrUnsent(record);
-const jrCanEdit = record => !record.deleted && record.attendance !== -1 && record.attendance !== 1 && !record.paid && !jrLocked(record);
+const jrCanDeleteUnsent = record => jrCanEditJournal() && !record.deleted && Number(record.id) < 0 && jrUnsent(record);
+const jrCanEdit = record => jrCanEditJournal() && !record.deleted && record.attendance !== -1 && record.attendance !== 1 && !record.paid && !jrLocked(record);
+function jrReadonlyAppointmentCard(record) {
+  const staff = journal.data?.staff?.find(item => item.id === record.staffId);
+  return `<section class="jr-booking-panel jr-readonly-card"><p class="jr-hint">Только просмотр</p>
+    <h3>${jrEscape(record.clientName || 'Клиент')}</h3>
+    <p>${jrEscape(record.date || '')} · ${jrEscape(jrTimeRange(record))} · ${jrEscape(staff?.name || record.staffName || 'Сотрудник')}</p>
+    <p>${jrEscape(jrStatus(record))}</p>${jrServicesPanel(record, false)}
+    ${record.comment ? '<h4>Комментарий к записи</h4><p>' + jrEscape(record.comment) + '</p>' : ''}
+    <button type="button" class="btn btn-sec" id="jrHistoryOpen">История изменений</button><div id="jrHistory" class="jr-history-box" hidden></div></section>`;
+}
 function jrAppointmentCard(record) {
+  if (!jrCanEditJournal() || record.capabilities?.canEdit === false) return jrReadonlyAppointmentCard(record);
   const canEdit = jrCanEdit(record),
     canChange = jrCanChange(record);
   const editNote = jrSyncing(record)
@@ -267,6 +281,7 @@ function jrRenderRecord(r) {
     jrEl('jrModal').classList?.add('jr-dialog-card');
     jrSetCardStatus(r.deleted ? null : r.attendance);
     if (jrEl('jrModal')?.dataset) { if (r.paidFull) jrEl('jrModal').dataset.paidFull = '1'; else delete jrEl('jrModal').dataset.paidFull; }
+    if (!jrCanEditJournal() || r.capabilities?.canEdit === false) { jrBindHistory(r); return; }
     if (!r.deleted && r.attendance !== -1) {
       jrEl('jrPaymentOpen').onclick = () => jrPayFromCard(r.id);
       // Quick payment preselects the method in the payment form.
@@ -311,6 +326,13 @@ function jrRenderRecord(r) {
       jrEl('jrTabChat').onclick = () => jrChatShowTab(r, 'chat');
       jrEl('jrTabClient').onclick = () => jrChatShowTab(r, 'client');
     }
+    jrBindHistory(r);
+    // Lazy, once per opened card; errors stay inside the panel.
+    if (jrCanUseStock() && typeof jrStockBind === 'function') jrStockBind(r);
+    if (!jrCanUseStock()) for (const id of ['jrTabGoods', 'jrConsumablesOpen']) { const el = jrEl(id); if (el) { el.disabled = true; el.hidden = true; } }
+    jrLoadClientSummary(r);
+}
+function jrBindHistory(r) {
     const historyBtn = jrEl('jrHistoryOpen');
     if (historyBtn) {
       historyBtn.setAttribute?.('aria-controls', 'jrHistory');
@@ -330,9 +352,6 @@ function jrRenderRecord(r) {
         if (kept.open && !kept.loading) void jrLoadHistory(r.id);
       }
     }
-    // Lazy, once per opened card; errors stay inside the panel.
-    if (typeof jrStockBind === 'function') jrStockBind(r);
-    jrLoadClientSummary(r);
 }
 // The card is tinted by the visit status (like the block in the grid) and
 // follows a status click at once, before saving.
@@ -371,6 +390,7 @@ function jrWatchRecord(id) {
   schedule();
 }
 async function jrSyncAction(outboxId, action) {
+  if (!jrCanEditJournal()) return false;
   let ok = false;
   await jrWithBusy(action === 'retry' ? 'Отправляем повторно…' : 'Убираем…', async () => {
     try { await jrApi(`sessions/${encodeURIComponent(outboxId)}/${action}`, {}); ok = true; }
@@ -381,6 +401,7 @@ async function jrSyncAction(outboxId, action) {
   return true;
 }
 function jrConfirmAction(r, action) {
+  if (!jrCanEditJournal()) return false;
   jrShowModal(action === 'cancel' ? 'Отменить запись' : 'Подтвердить запись');
   journal.draft = { action, recordId: r.id };
   journal.session = jrNewSession({ recordId: r.id });
@@ -394,6 +415,7 @@ function jrConfirmAction(r, action) {
 // opens. Before, the button was disabled after any change and the cashier had
 // to save, reopen the card and only then pay.
 async function jrPayFromCard(recordId, preferred = 'all') {
+  if (!jrCanEditJournal()) return false;
   if (journal.busy) return;
   if (journal.session?.edit && !journal.payment) {
     const saved = await jrSave(jrSessionBody());
@@ -402,6 +424,7 @@ async function jrPayFromCard(recordId, preferred = 'all') {
   return preferred === 'all' ? jrOpenPayment(recordId) : jrOpenPayment(recordId, preferred);
 }
 function jrBindRecordEdit(record) {
+  if (!jrCanEditJournal()) return false;
   journal.session = jrNewSession({ recordId: record.id, servicesVersion: record.servicesVersion });
   const changed = () => {
     jrEl('jrSaveChanges').disabled = false;
@@ -637,6 +660,7 @@ function jrClientSummaryHtml(s) {
   return `${extra}<section class="jr-client-info"><h4>Статистика</h4><div class="jr-client-stats"><p>Последний визит<span>${lastVisit ? jrEscape(lastVisit) : '—'}</span></p><p>Всего визитов<span>${v(s.visits?.success)}</span></p><p>Неявок<span>${v(s.visits?.fail)}</span></p><p>Бонусы<span>${v(s.bonusBalance)}</span></p><p>Уровень<span>${v(s.loyaltyLevel)}</span></p><p>Потрачено<span>${s.totalSpent == null ? '—' : jrEscape(Number(s.totalSpent).toLocaleString('ru-RU') + ' ₽')}</span></p></div>${source ? `<small class="jr-hint">Бонусы ${source}</small>` : ''}<h5>Абонементы</h5>${abonements}${last}</section>`;
 }
 async function jrLoadClientSummary(r) {
+  if (!jrCanUseClientTools()) return;
   const box = jrEl('jrClientSummaryBox');
   if (!box) return;
   const phone = String(r?.clientPhone || '').replace(/\D/g, '');
@@ -667,6 +691,7 @@ async function jrLoadClientSummary(r) {
 // The client name opens the LoyalPro client card (clients.js openCD). The journal
 // dialog is modal (top layer), so it is closed first; unsaved edits ask as on ✕.
 async function jrOpenClientCard(r) {
+  if (!jrCanOpenClientCard()) return false;
   const kind = jrUnsavedKind();
   if (kind) return jrAskClose(kind);
   const phone = String(r?.clientPhone || '').replace(/\D/g, '');

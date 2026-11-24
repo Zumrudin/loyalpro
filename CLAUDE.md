@@ -70,6 +70,8 @@ Mobile clients use a separate auth path: `routes/mobile-auth.js` + `routes/mobil
 
 ### Security changes (актуально 17.11.2026, production rollout)
 
+- **Dev и production 24.11.2026:** учёт бумажных папок 1–2000 с повторным использованием номеров и архивом; «Номер папки пациента» на странице рабочего дня. Журнал открыт всем сотрудникам; specialist — только чтение без телефонов в API журнала, admin_cashier — рабочий день и отметка подготовки папки. Административные права owner сохранены. Подробности: `docs/2026-11-24-paper-folders-production.md`, `docs/2026-11-24-journal-staff-access.md`.
+
 - **Актуальный dev и production — site-taxonomy-20261117:** каталог salon1 приведён к пяти направлениям и 23 разделам peri-clinic.ru; дополнительные услуги сохранены отдельно. 272 услуги, 637 назначений, 33 ссылки прайсов сохранены; шесть вторичных связей для трихологии. Архив категорий и исходная категория учёта защищают расчёты; откат приложения требует сначала обратного переноса данных. Подробности, исключения и backup: `docs/catalog/2026-11-17-peri-taxonomy.md`.
 - **Текущий feature release production и dev — 17.11.2026:** mila-catalog-20261117, код 5b4c433. Единый каталог Settings/экономика/журнал/Мила, назначения и прайсы категорий. Production current → /srv/loyalpro/releases/mila-catalog-20261117; rollback auth-tenant-20261117. Import272/reconcile269/assignments637/photoRefs33/uniqueFiles22/subcats19; 3 zero-duration исключения. Backup и приёмка: docs/superpowers/plans/2026-11-17-mila-unified-catalog-price-images.md. Auth/tenant transport A1–A5 и LLM routing не менялись.
 

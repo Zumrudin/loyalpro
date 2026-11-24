@@ -319,6 +319,37 @@ const LOCAL_DELETE_SQL = `WITH parent AS (UPDATE journal_outbox SET status='canc
   INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
   SELECT $1,$3,$4,$5,NULL,id,'cancelled',$6,$7 FROM parent
   ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`;
+// Local creations have no YClients client id yet. Resolve only an unambiguous
+// tenant-owned phone match; an unknown client can be reconciled by its webhook.
+async function reconcilePaperOutbox(salonId, outboxId) {
+  const folders = require('../paper-folders');
+  await folders.safely(() => folders.reconcileOutbox(salonId, Number(outboxId)));
+}
+
+async function replayWithPaper(salonId, row, session, hash) {
+  const result = replay(row, session, hash);
+  await reconcilePaperOutbox(salonId, row.id);
+  return result;
+}
+
+async function reconcilePaperClient(salonId, overlay, recordId) {
+  const folders = require('../paper-folders');
+  await folders.safely(async () => {
+    if (Number(recordId) > 0) {
+      const record = await db.oneOrNone('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, recordId]);
+      if (record?.id) await folders.reconcileRecord(salonId, record.id);
+    }
+    const client = overlay?.client || overlay?.patch?.client;
+    if (client?.id) return folders.reconcileYcClient(salonId, client.id);
+    const phone = String(client?.phone || '').replace(/\D/g, '');
+    if (phone.length < 10) return;
+    const rows = await db.any(
+      "SELECT id FROM clients WHERE salon_id=$1 AND right(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 LIMIT 2",
+      [salonId, phone.slice(-10)]);
+    if (rows.length === 1) await folders.reconcile(salonId, rows[0].id);
+  });
+}
+
 async function deleteUnsent(salonId, uid, session, hash, parent, actor) {
   if (session.status !== 'delete' || !parent || parent.status !== 'queued' || parent.released_at != null || parent.yclients_record_id != null) return null;
   const overlay = { kind: 'patch', patch: { deleted: true } };
@@ -329,6 +360,9 @@ async function deleteUnsent(salonId, uid, session, hash, parent, actor) {
   if (!row) return null;
   // Queued bonus/cash operations of the cancelled packages leave the ledger.
   await finOps.safely('journal-delete-unsent', () => finOps.syncCancelledOutbox(salonId));
+  await reconcilePaperOutbox(salonId, parent.id);
+  await reconcilePaperOutbox(salonId, row.id);
+  await reconcilePaperClient(salonId, parent.overlay);
   return { outboxId: Number(row.id), recordId: session.recordId, status: row.status };
 }
 
@@ -373,7 +407,7 @@ async function enqueue(salonId, userId, session) {
     // Idempotency first: a replay of a queued session must get the same answer
     // even though its own overlay now occupies the slot.
     const prior = await db.oneOrNone(OUTBOX_BY_SESSION, [salonId, session.sessionId]);
-    if (prior) return replay(prior, session, hash);
+    if (prior) return replayWithPaper(salonId, prior, session, hash);
     let parent = await parentOf(salonId, session);
     const uid = Number(userId);
     const owner = Number.isSafeInteger(uid) && uid > 0 ? uid : null;
@@ -383,7 +417,7 @@ async function enqueue(salonId, userId, session) {
     // Lost the race to «Отправить» (or same session concurrently): regular path.
     if (session.status === 'delete' && parent) {
       const again = await db.oneOrNone(OUTBOX_BY_SESSION, [salonId, session.sessionId]);
-      if (again) return replay(again, session, hash);
+      if (again) return replayWithPaper(salonId, again, session, hash);
       parent = await parentOf(salonId, session);
     }
     const { steps, overlay, drops, audit: auditDraft } = await validate(salonId, session);
@@ -412,8 +446,10 @@ async function enqueue(salonId, userId, session) {
     if (!row) {
       const raced = await db.oneOrNone(OUTBOX_BY_SESSION, [salonId, session.sessionId]);
       if (!raced) m.fail('Не удалось сохранить изменения. Повторите.', 409);
-      return replay(raced, session, hash);
+      return replayWithPaper(salonId, raced, session, hash);
     }
+    await reconcilePaperOutbox(salonId, row.id);
+    await reconcilePaperClient(salonId, storedOverlay, recordId);
     if (onlyDrops) return { outboxId: Number(row.id), recordId: session.recordId, status: 'saved' };
     // Ledger of finance operations (never breaks the save: failures are logged, reconcile catches up).
     await finOps.safely('journal-package', () => finOps.recordJournalPackage({ id: row.id, salon_id: salonId,

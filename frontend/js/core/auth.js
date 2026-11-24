@@ -82,6 +82,7 @@ async function doChangePw() {
     if (startPage === 'dashboard') { loadDashboard(); loadLs(); }
     else if (startPage === 'staff-dashboard') { loadStaffDashboard(); }
     else if (startPage === 'home-care') { loadHomeCare(); }
+    else if (startPage === 'workday') { loadWorkday(); }
     else { loadDashboard(); loadLs(); }
   } catch(e) {
     err.textContent = e.message; err.style.display = 'block';

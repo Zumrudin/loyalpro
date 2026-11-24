@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { pool, db } = require('../db');
-const { auth } = require('../middleware/auth');
+const { auth, requireRole } = require('../middleware/auth');
+const paperFolders = require('../services/paper-folders');
 const finOps = require('../services/finance-ops');
 const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
@@ -49,8 +50,22 @@ router.get('/:id', auth, async (req, res) => {
       'SELECT * FROM records WHERE client_id=$1 AND salon_id=$2 ORDER BY visit_date DESC LIMIT 20',
       [req.params.id, req.user.salonId]
     );
+    client.paper_folder = await paperFolders.get(req.user.salonId, client.id);
     res.json({ client, history, records });
   } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
+});
+
+router.patch('/:id/paper-folder', auth, requireRole('owner', 'admin', 'admin_cashier'), async (req, res) => {
+  if (req.user.role === 'admin_cashier' &&
+      (Object.keys(req.body || {}).length !== 1 || typeof req.body.prepared !== 'boolean')) {
+    return res.status(403).json({ error: 'Доступна только отметка подготовки папки' });
+  }
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Некорректный клиент' });
+  try {
+    const paperFolder = await paperFolders.update(req.user.salonId, id, req.user.userId, req.body);
+    res.json({ paperFolder });
+  } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Не удалось изменить папку' }); }
 });
 
 router.post('/:id/bonus', auth, async (req, res) => {

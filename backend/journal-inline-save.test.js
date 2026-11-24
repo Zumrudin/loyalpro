@@ -10,7 +10,7 @@ function harness() {
     return nodes.get(id);
   };
   let uuid = 0;
-  const c = vm.createContext({ document: { getElementById: get }, crypto: { randomUUID: () => `new-key-${++uuid}` },
+  const c = vm.createContext({ ME: { role: 'owner' }, document: { getElementById: get }, crypto: { randomUUID: () => `new-key-${++uuid}` },
     notify: jest.fn(), Date, URLSearchParams, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/js/pages/journal.js'), 'utf8'), c);
   vm.runInContext("journal.session={sessionId:'initial',recordId:71,edit:{comment:'draft'}}", c);

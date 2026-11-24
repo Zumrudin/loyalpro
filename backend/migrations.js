@@ -3,6 +3,7 @@
 // ============================================================
 
 async function runMigrations(client) {
+  await client.query(PAPER_FOLDERS_DDL);
   await client.query(MAX_LOYALTY_DDL);
   // Journal writes fail closed until this additive table is available.
   await client.query(JOURNAL_DDL);
@@ -3510,3 +3511,39 @@ END $$;
 `;
 
 module.exports = { SERVICE_TAXONOMY_DDL, SERVICE_CATEGORY_PHOTOS_DDL, SERVICE_STAFF_ASSIGNMENTS_DDL, HOME_CARE_TENANT_INTEGRITY_DDL, REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };
+
+// Fixed physical cabinet capacity. No existing document numbers are rewritten.
+const PAPER_FOLDERS_DDL = `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_salon_id_id ON clients (salon_id,id);
+CREATE TABLE IF NOT EXISTS paper_folders (
+  id BIGSERIAL PRIMARY KEY,
+  salon_id INTEGER NOT NULL REFERENCES salons(id),
+  client_id INTEGER,
+  outbox_id BIGINT,
+  number INTEGER CHECK(number BETWEEN 1 AND 2000),
+  archived BOOLEAN NOT NULL DEFAULT FALSE,
+  prepared BOOLEAN NOT NULL DEFAULT FALSE,
+  committed BOOLEAN NOT NULL DEFAULT FALSE,
+  archived_at TIMESTAMPTZ,
+  cycle_started_at TIMESTAMPTZ,
+  tracked_records BIGINT[] NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(salon_id,client_id),
+  UNIQUE(salon_id,outbox_id),
+  UNIQUE(salon_id,number),
+  FOREIGN KEY(salon_id,client_id) REFERENCES clients(salon_id,id),
+  CHECK(client_id IS NOT NULL OR outbox_id IS NOT NULL)
+);
+CREATE TABLE IF NOT EXISTS paper_folder_events (
+  id BIGSERIAL PRIMARY KEY,
+  salon_id INTEGER NOT NULL REFERENCES salons(id),
+  folder_id BIGINT NOT NULL REFERENCES paper_folders(id),
+  client_id INTEGER,
+  number INTEGER,
+  action TEXT NOT NULL CHECK(action IN ('reserved','registered','archived','activated','released','prepared','unprepared','linked')),
+  user_id INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_paper_folder_events_client ON paper_folder_events(salon_id,client_id,id);
+`;
+module.exports.PAPER_FOLDERS_DDL = PAPER_FOLDERS_DDL;

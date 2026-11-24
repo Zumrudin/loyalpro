@@ -1,5 +1,6 @@
 // Журнал записи: «Отправить в YClients» и сверка операций. Общая глобальная область с journal.js.
 async function jrReviewPending() {
+  if (!jrCanEditJournal()) return false;
   const request = ++journal.modalRequest;
   jrShowModal('Сверка операций');
   try {
@@ -24,6 +25,8 @@ function jrUpdateDispatchButton(unsent) {
   const button = jrEl('jrDispatch');
   if (!button) return;
   journal.unsent = unsent || null;
+  button.hidden = !jrCanEditJournal();
+  button.disabled = !jrCanEditJournal();
   const records = Number(unsent?.records) || 0, schedules = Number(unsent?.schedules) || 0, n = records + schedules;
   button.textContent = n ? `Отправить в YClients (${n})` : 'Отправить в YClients';
   button.classList.toggle('btn-pri', n > 0);
@@ -34,6 +37,7 @@ const jrDispatchWord = n => { const a = n % 10, b = n % 100; return a === 1 && b
 const jrScheduleWord = n => { const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? 'график' : a >= 2 && a <= 4 && (b < 12 || b > 14) ? 'графика' : 'графиков'; };
 const jrDispatchCountText = value => `${Number(value?.records) || 0} ${jrDispatchWord(Number(value?.records) || 0)} и ${Number(value?.schedules) || 0} ${jrScheduleWord(Number(value?.schedules) || 0)}`;
 async function jrDispatchOpen() {
+  if (!jrCanEditJournal()) return false;
   const request = ++journal.modalRequest;
   journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
   jrShowModal('Отправить в YClients');

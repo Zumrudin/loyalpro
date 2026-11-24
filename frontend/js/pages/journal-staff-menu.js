@@ -1,6 +1,7 @@
 // Employee/day schedule menu. Saves a full-day change locally; only explicit
 // «Отправить в YClients» releases it to the integration worker.
 function jrStaffMenuButton(staff, date, label) {
+  if (!jrCanManageSchedule()) return `<span>${jrEscape(label)}</span>`;
   const id = Number(staff.id), working = staff.working === true;
   const menuId = `jrStaffMenu-${id}-${date}`;
   const actions = working
@@ -23,6 +24,7 @@ function jrStaffMenuClose(focus = false) {
   if (focus) toggle?.focus?.();
 }
 function jrStaffMenuToggle(root) {
+  if (!jrCanManageSchedule()) return false;
   if (!root) return;
   const menu = root.querySelector('[role="menu"]');
   const toggle = root.querySelector('[data-staff-menu-toggle]');
@@ -106,6 +108,7 @@ function jrScheduleAddFields() {
     <section class="jr-schedule-breaks"><div class="jr-schedule-break-head"><span>Перерывы</span><button type="button" class="jr-schedule-break-add" id="jrScheduleBreakAdd">＋ Добавить перерыв</button></div><div class="jr-schedule-break-list" id="jrScheduleBreakList"></div></section>`;
 }
 function jrScheduleOpenForm(context, action, options = {}) {
+  if (!jrCanManageSchedule()) return false;
   const title = options.title || { break: 'Добавить перерыв', add: 'Добавить рабочий день', remove: 'Убрать рабочий день' }[action];
   journal.modalRequest++; journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
   jrShowModal(title);
@@ -132,6 +135,7 @@ function jrStaffMenuForm(context, action) {
   jrScheduleOpenForm(context, action);
 }
 function jrScheduleAddOpen() {
+  if (!jrCanManageSchedule()) return false;
   const data = journal.data;
   const date = String(jrEl('jrDate')?.value || '');
   if (!data || !date || data.date !== date) {
@@ -152,6 +156,7 @@ function jrScheduleAddOpen() {
   return true;
 }
 async function jrStaffScheduleSave() {
+  if (!jrCanManageSchedule()) return false;
   const state = journal.scheduleForm;
   if (!state || journal.busy) return false;
   const { action } = state;
@@ -213,6 +218,7 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 // Always reachable from the toolbar, even when a failed day removal hides a
 // staff column or the user has navigated to another date.
 async function jrScheduleChangesOpen() {
+  if (!jrCanManageSchedule()) return false;
   const request = ++journal.modalRequest;
   journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null; journal.scheduleForm = null;
   jrShowModal('Изменения графика');

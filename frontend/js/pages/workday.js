@@ -102,12 +102,25 @@ function wdFmtAgo(iso, now) {
 function _wdBox(id, html) { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 function _wdErr(e) { return `<div class="empty">Не удалось загрузить: ${esc((e && e.message) || 'ошибка')}</div>`; }
 
+function wdCanOpenCare() {
+  return typeof ME !== 'undefined' && ['owner', 'admin'].includes(ME?.role);
+}
+function wdGuardCare(e) {
+  if (wdCanOpenCare() || !e.target?.closest?.('#wdCareCard')) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}
+
 async function loadWorkday() {
+  const care = document.getElementById('wdCareCard');
+  if (care) care.style.display = wdCanOpenCare() ? '' : 'none';
   const req = ++_wdReq;
   const today = wdTodayMsk();
+  wdEnsureFolders();
+  const foldersP = wdLoadFolders();
   const dateEl = document.getElementById('wdDate');
   if (dateEl) dateEl.textContent = new Date().toLocaleDateString('ru', { timeZone: 'Europe/Moscow', weekday: 'long', day: 'numeric', month: 'long' });
-  ['wdRecords', 'wdDialogs', 'wdCerts'].forEach(id => _wdBox(id, '<div class="empty">Загрузка…</div>'));
+  ['wdDialogs', 'wdCerts'].forEach(id => _wdBox(id, '<div class="empty">Загрузка…</div>'));
   ['wdTotal', 'wdCame', 'wdExpected', 'wdLost', 'wdEscN', 'wdCertN'].forEach(id => _wdBox(id, '—'));
 
   const recP = api('GET', '/api/records?' + new URLSearchParams({ dateFrom: today, dateTo: today, limit: 200 }))
@@ -117,13 +130,9 @@ async function loadWorkday() {
       const s = wdSummarize(views);
       _wdBox('wdTotal', String(s.total)); _wdBox('wdCame', String(s.came));
       _wdBox('wdExpected', String(s.expected)); _wdBox('wdLost', String(s.lost));
-      _wdBox('wdRecords', views.length ? views.map(v => `
-        <div class="wd-row wd-${v.bucket}">
-          <div class="wd-time">${esc(v.time || '—')}</div>
-          <div class="wd-main"><div class="wd-name">${esc(v.client)}</div><div class="wd-sub">${esc(v.services)} · ${esc(v.staff)}</div></div>
-          <span class="badge wd-badge wd-badge-${v.bucket}">${esc(v.label)}${v.paid ? ' ✓' : ''}</span>
-        </div>`).join('') : '<div class="empty">На сегодня записей нет</div>');
-    }).catch(e => { if (req === _wdReq) _wdBox('wdRecords', _wdErr(e)); });
+    }).catch(() => {
+      if (req === _wdReq) ['wdTotal', 'wdCame', 'wdExpected', 'wdLost'].forEach(id => _wdBox(id, '—'));
+    });
 
   const dlgP = api('GET', '/api/chat/dialogs')
     .then(d => {
@@ -151,11 +160,12 @@ async function loadWorkday() {
         </div>`).join('') : '<div class="empty">Новых заявок нет</div>');
     }).catch(e => { if (req === _wdReq) { _wdBox('wdCertN', '—'); _wdBox('wdCerts', _wdErr(e)); } });
 
-  await Promise.all([recP, dlgP, certP]);
+  await Promise.all([recP, dlgP, certP, foldersP]);
 }
 
 // Клики по строкам: диалог → чат (тот же путь, что «Забота» → чат), заявка → «Справки».
 if (typeof document !== 'undefined') {
+  document.addEventListener('click', wdGuardCare, true);
   document.addEventListener('click', e => wdOnActivate(e));
   document.addEventListener('keydown', e => { if (e.key === 'Enter') wdOnActivate(e); });
 }
@@ -171,4 +181,91 @@ function wdOnActivate(e) {
   }
 }
 
-if (typeof module !== 'undefined') module.exports = { wdTodayMsk, wdRecordView, wdSummarize, wdEscalated, wdReasonText, wdFmtAgo };
+if (typeof module !== 'undefined') module.exports = { wdTodayMsk, wdRecordView, wdSummarize, wdEscalated, wdReasonText, wdFmtAgo, wdTomorrowMsk, wdFolderItems, wdFolderListHtml };
+
+
+// Folder preparation is independent of the records summary, including errors.
+let _wdFolderReq = 0;
+function wdTomorrowMsk(now) {
+  const day = wdTodayMsk(now);
+  return new Date(Date.parse(day + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10);
+}
+function wdFolderItems(items) {
+  const unique = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item) continue;
+    const clientId = Number(item.clientId);
+    const outboxId = Number(item.outboxId);
+    const key = Number.isSafeInteger(clientId) && clientId > 0 ? 'client:' + clientId
+      : (typeof item.key === 'string' && item.key ? item.key
+        : (Number.isSafeInteger(outboxId) && outboxId > 0 ? 'outbox:' + outboxId : null));
+    if (key && !unique.has(key)) unique.set(key, item);
+  }
+  const number = item => Number(item.number) > 0 ? Number(item.number) : Infinity;
+  return [...unique.values()].sort((a, b) => (number(a) - number(b)) || String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+}
+function wdEnsureFolders() {
+  const page = document.getElementById('page-workday');
+  if (!page || document.getElementById('wdFolders')) return;
+  const panel = document.createElement('section');
+  panel.className = 'card mb pf-day';
+  panel.id = 'wdFolders';
+  panel.innerHTML = `<div class="ct">Номер папки пациента</div>
+    <div class="pf-toolbar"><label for="wdFolderDate">Дата приёма</label> <input type="date" id="wdFolderDate" value="${wdTomorrowMsk()}">
+    <button type="button" class="btn btn-sec btn-sm" id="wdFolderReload">Обновить</button></div>
+    <div class="wd-sub">По умолчанию — завтра. Отметка «Пакет создан» означает, что бумажные документы уже находятся в папке.</div>
+    <div id="wdFolderCounts" class="wd-sub"></div><div id="wdFolderList"></div>`;
+  const slot = document.getElementById('wdFolderSlot') || document.getElementById('wdRecords')?.closest('.card');
+  if (slot) slot.replaceWith(panel);
+  else page.appendChild(panel);
+  document.getElementById('wdFolderDate').addEventListener('change', wdLoadFolders);
+  document.getElementById('wdFolderReload').addEventListener('click', wdLoadFolders);
+  panel.addEventListener('change', e => {
+    const checkbox = e.target.closest('[data-folder-prepared], [data-folder-outbox]');
+    if (checkbox) wdSetFolderPrepared(checkbox);
+  });
+}
+function wdFolderListHtml(items) {
+  return items.length ? items.map(item => {
+    const id = Number(item.clientId);
+    const outboxId = Number(item.outboxId);
+    const binding = id > 0 ? 'data-folder-prepared="' + id + '"' : 'data-folder-outbox="' + outboxId + '"';
+    const number = Number(item.number) > 0 ? '№ ' + Number(item.number) : 'Номер не назначен';
+    return `<div class="wd-row pf-row"><div class="wd-time pf-number">${esc(number)}</div>
+      <div class="wd-main"><div class="wd-name">${esc(item.name || 'Пациент')}${item.archived ? ' · Архив' : ''}</div>
+      <div class="wd-sub">${esc(item.time || '')} · ${esc(item.task || (item.archived ? 'Новый договор и пакет документов' : (!item.prepared ? 'Создать пакет документов' : 'Взять папку к приёму')))}</div></div>
+      <label class="pf-prepared"><input type="checkbox" ${binding} ${item.prepared ? 'checked' : ''} ${!item.number ? 'disabled' : ''}> Пакет создан</label></div>`;
+  }).join('') : '<div class="empty">На выбранную дату пациентов нет</div>';
+}
+async function wdLoadFolders() {
+  const dateEl = document.getElementById('wdFolderDate');
+  if (!dateEl) return;
+  const date = dateEl.value;
+  const req = ++_wdFolderReq;
+  _wdBox('wdFolderCounts', '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { _wdBox('wdFolderList', '<div class="empty">Выберите дату приёма</div>'); return; }
+  _wdBox('wdFolderList', '<div class="empty">Загрузка…</div>');
+  try {
+    const data = await api('GET', '/api/paper-folders/day?date=' + encodeURIComponent(date));
+    if (req !== _wdFolderReq) return;
+    const items = wdFolderItems(data.items);
+    const needsNumber = items.filter(item => item.needsNumber).length;
+    const refreshed = data.updatedAt && Number.isFinite(Date.parse(data.updatedAt))
+      ? ' · Обновлено: ' + new Date(data.updatedAt).toLocaleString('ru', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) + ' МСК' : '';
+    _wdBox('wdFolderCounts', `Пациентов: ${items.length} · Пакет создан: ${items.filter(item => item.prepared).length} · Без номера: ${needsNumber} · Занято: ${Number(data.occupied) || 0} из 2000 · Свободно: ${Number(data.free) || 0}${esc(refreshed)}`);
+    _wdBox('wdFolderList', wdFolderListHtml(items));
+  } catch (e) { if (req === _wdFolderReq) _wdBox('wdFolderList', _wdErr(e)); }
+}
+async function wdSetFolderPrepared(checkbox) {
+  const prepared = checkbox.checked;
+  if (!prepared && !confirm('Документы вынуты из папки? Снять отметку «Пакет создан»?')) { checkbox.checked = true; return; }
+  checkbox.disabled = true;
+  try {
+    const url = checkbox.dataset.folderOutbox
+      ? '/api/paper-folders/outbox/' + Number(checkbox.dataset.folderOutbox)
+      : '/api/clients/' + Number(checkbox.dataset.folderPrepared) + '/paper-folder';
+    await api('PATCH', url, { prepared });
+    await wdLoadFolders();
+  } catch (e) { checkbox.checked = !prepared; notify(e.message, 'err'); }
+  finally { checkbox.disabled = false; }
+}

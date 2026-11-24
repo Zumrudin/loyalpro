@@ -455,6 +455,7 @@ pool.connect()
       startNotificationWorker();
       require('./services/care/worker').startCareWorker();
       require('./services/reminders/worker').startRemindersWorker();
+      require('./services/paper-folders').start();
       require('./services/agent/followup-worker').startFollowupWorker();
       if (config.JOURNAL_OUTBOX) require('./services/journal/outbox-worker').start();
       if (journalWarmUp) journalWarmUp().catch(() => logger.warn('journal warm-up failed'));

@@ -7,6 +7,27 @@ function jrStoredGridStep() {
   } catch (_) { return 15; }
 }
 const journal = { data: null, week: null, view: 'day', request: 0, modalRequest: 0, slotRequest: 0, sectionRequest: 0, busy: false, draft: null, slots: [], preferredTime: null, gridStep: jrStoredGridStep() };
+// Session role and server capabilities must both permit an action.
+function jrRole() { return typeof ME !== 'undefined' ? ME?.role : null; }
+function jrCapability(name) {
+  return ['owner', 'admin', 'admin_cashier'].includes(jrRole()) && journal.data?.capabilities?.[name] !== false;
+}
+function jrCanEditJournal() { return jrCapability('canEdit'); }
+function jrCanViewPhones() { return jrCapability('canViewPhones'); }
+function jrCanUseClientTools() { return jrCapability('canUseClientTools'); }
+function jrCanManageSchedule() { return jrCanEditJournal() && ['owner', 'admin'].includes(jrRole()) && journal.data?.capabilities?.canManageSchedule !== false; }
+function jrCanOpenClientCard() { return jrCanUseClientTools() && ['owner', 'admin'].includes(jrRole()); }
+function jrCanUseStock() { return jrCanEditJournal() && ['owner', 'admin'].includes(jrRole()); }
+function jrApplyPermissions() {
+  for (const id of ['jrNew', 'jrSummaryPlus', 'jrDispatch']) {
+    const el = jrEl(id);
+    if (el) { el.hidden = !jrCanEditJournal(); el.disabled = !jrCanEditJournal(); }
+  }
+  for (const id of ['jrScheduleAdd', 'jrScheduleChanges']) {
+    const el = jrEl(id);
+    if (el) { el.hidden = !jrCanManageSchedule(); el.disabled = !jrCanManageSchedule(); }
+  }
+}
 // Phone layout threshold: the same number is in journal.css (@media (max-width:700px)) — change both together.
 const JR_MOBILE_MAX = 700;
 const jrIsMobile = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(`(max-width: ${JR_MOBILE_MAX}px)`).matches;
@@ -19,6 +40,13 @@ const jrMinutes = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5
 const jrTimeLabel = minute => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 const jrStatus = r => r.deleted ? 'Удалена' : ({ '-1': 'Не пришёл / отменена', 0: 'Ожидание', 1: 'Пришёл', 2: 'Подтверждена' }[r.attendance] || 'Ожидание');
 async function jrApi(path, body) {
+  const readPath = String(path).split('?')[0];
+  const readAllowed = /^(?:day|day-summary|week|month|records\/-?\d+(?:\/history)?)$/.test(readPath);
+  if (!jrCanEditJournal() && (body || !['owner', 'admin', 'admin_cashier', 'specialist'].includes(jrRole()) || !readAllowed)) {
+    const error = new Error('Это действие недоступно вашей роли.');
+    error.status = 403;
+    throw error;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
@@ -36,6 +64,7 @@ async function jrApi(path, body) {
 }
 async function loadJournal(opts = {}) {
   const silent = !!opts?.silent;
+  jrApplyPermissions();
   if (!jrEl('jrDate').value) jrEl('jrDate').value = jrToday();
   if (typeof sideCalendarSync === 'function') sideCalendarSync(!silent);
   if (typeof jrToolbarSync === 'function') jrToolbarSync();
@@ -64,11 +93,12 @@ async function loadJournal(opts = {}) {
     journal.week = week;
     const grid = jrEl('jrGrid'), scroll = [grid.scrollTop, grid.scrollLeft];
     journal.data = data;
+    jrApplyPermissions();
     if (typeof jrToolbarSummarySync === 'function') jrToolbarSummarySync();
     jrUpdateStaffFilter();
     if (typeof jrToolbarSync === 'function') jrToolbarSync();
     jrEl('jrState').textContent = jrFreshnessText(data);
-    jrEl('jrNew').disabled = !data.staff.length;
+    jrEl('jrNew').disabled = !jrCanEditJournal() || !data.staff.length;
     jrUpdateDispatchButton(data.unsent);
     jrRender();
     if (silent) { if (scroll[0] != null) grid.scrollTop = scroll[0]; if (scroll[1] != null) grid.scrollLeft = scroll[1]; }
@@ -319,6 +349,7 @@ function jrSessionBody() {
 // Journal and local stock are separate transactions. Remember an acknowledged
 // journal package while stock is retried; never submit that mutation twice.
 async function jrSave(body) {
+  if (!jrCanEditJournal()) return false;
   let ok = false, used = false, res = null;
   await jrWithBusy('Сохраняем…', async () => {
     let stage = 'journal';

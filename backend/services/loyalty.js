@@ -56,6 +56,7 @@ function getRecordCost(ycr) {
 }
 
 function getRecordStatus(ycr) {
+  if (ycr.deleted) return 'deleted';
   if (ycr.status_id !== undefined && ycr.status_id !== null) {
     const sid = parseInt(ycr.status_id);
     if (sid === 4) return 'completed';
@@ -66,7 +67,6 @@ function getRecordStatus(ycr) {
     if (sid === 7) return 'deleted';
     return 'waiting';
   }
-  if (ycr.deleted) return 'deleted';
   const att = ycr.attendance !== undefined ? parseInt(ycr.attendance) : undefined;
   if (att === 1) return 'arrived';
   if (att === 2) return 'confirmed';
@@ -233,6 +233,14 @@ async function resolveRecordClientId(salonId, ycClient) {
   return Array.isArray(rows) && rows.length === 1 ? rows[0].id : null;
 }
 
+async function reconcilePaperRecord(salonId, recordId, previousClientId) {
+  const folders = require('./paper-folders');
+  await folders.safely(async () => {
+    await folders.reconcileRecord(salonId, recordId);
+    if (previousClientId) await folders.reconcile(salonId, previousClientId, { removed: true });
+  });
+}
+
 async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
   if (!ycr || ycr.id == null) return null;
   const status  = getRecordStatus(ycr);
@@ -259,6 +267,7 @@ async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
        JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
        clientId || null, prev.id, ycr.client?.id ?? null]
     );
+    await reconcilePaperRecord(salonId, prev.id, clientId && Number(clientId) !== Number(prev.client_id) ? prev.client_id : null);
     return { id: prev.id, status, inserted: false, prev };
   }
   const ins = await db.one(
@@ -271,6 +280,7 @@ async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
      JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
      status, source || 'sync', JSON.stringify(ycr)]
   );
+  if (ins?.id) await reconcilePaperRecord(salonId, ins.id);
   return { id: ins?.id ?? null, status, inserted: true, prev: null };
 }
 
@@ -668,8 +678,8 @@ async function visitPaidWithBonuses(salon, ycRecordId, visitId) {
 }
 
 async function processRecordEvent(payload, salon, settings) {
-  const data = payload.data || {};
   const status = payload.status;
+  const data = status === 'delete' ? { ...(payload.data || {}), deleted: true } : (payload.data || {});
   const ycRecordId = data.id;
   const clientYcId = data.client?.id;
 
@@ -691,6 +701,7 @@ async function processRecordEvent(payload, salon, settings) {
   }
 
   let record = await db.oneOrNone('SELECT * FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+  const previousClientId = record?.client_id;
   if (!record) {
     record = await db.one(
       `INSERT INTO records
@@ -714,6 +725,8 @@ async function processRecordEvent(payload, salon, settings) {
        record.id, client?.id || null, clientYcId]
     );
   }
+
+  if (record?.id) await reconcilePaperRecord(salon.id, record.id, Number(client?.id) !== Number(previousClientId) ? previousClientId : null);
 
   if (status === 'delete' || data.deleted === true) {
     await revertCashback(ycRecordId, salon, clientYcId);

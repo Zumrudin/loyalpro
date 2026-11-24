@@ -240,7 +240,7 @@ async function runStep(ctx, step) {
 // a webhook would: YClients record webhooks lack technical_break_duration
 // (13.11.2026), and a break-less mirror let local checks accept a move into an
 // occupied window. Best effort — never changes the step's outcome.
-const MIRRORED_KINDS = new Set(['create', 'move', 'edit', 'confirm', 'cancel', 'delete']);
+const MIRRORED_KINDS = new Set(['create', 'move', 'edit', 'confirm', 'cancel', 'delete', 'pay', 'remove_payment']);
 async function refreshMirror(ctx, step) {
   if (step.kind === 'schedule') {
     try { await reference.storeSchedule(ctx.salonId, step.result.schedule); }

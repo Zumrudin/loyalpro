@@ -25,7 +25,7 @@
 <script src="js/core/utils.js?v=2026-11-13fav"></script>
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js?v=2026-11-08p"></script>
-<script src="js/core/auth.js?v=2026-06-02a"></script>
+<script src="js/core/auth.js?v=2026-11-24-cashier-workday"></script>
 <script src="js/core/nav.js?v=2026-11-16-sidebar"></script>
 <script src="js/core/sidebar.js?v=2026-11-16-sidebar"></script>
 <script src="js/core/sidebar-calendar.js?v=2026-11-16-sidebar"></script>
@@ -38,6 +38,7 @@
 <link rel="stylesheet" href="css/service-catalog.css?v=20261117-mila-prices">
 <link rel="stylesheet" href="css/finance.css?v=2026-11-12fin2">
 <link rel="stylesheet" href="css/stock.css?v=2026-11-15-sale-form">
+<link rel="stylesheet" href="css/paper-folders.css?v=2026-11-24">
 </head>
 <body>
 
@@ -116,11 +117,11 @@
     <div class="tb-crumb" id="tbCrumb"></div>
     <nav class="tb-nav" id="mainNav" aria-label="Разделы">
       <div class="nav-sec-t">Рабочее пространство</div>
-      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
+      <div class="tn" data-p="workday" data-roles="admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
       <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Обзор</div>
       <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
       <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" data-static-onclick="s10">Мои результаты</div>
-      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Журнал записи</div>
+      <div class="tn" data-p="journal" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Журнал записи</div>
       <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Записи</div>
       <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Пациенты</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Сообщения</div>
@@ -187,11 +188,11 @@
     </div>
     <nav class="mnav-list" id="mnavList" aria-label="Разделы">
       <div class="nav-sec-t">Рабочее пространство</div>
-      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
+      <div class="tn" data-p="workday" data-roles="admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
       <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Обзор</div>
       <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
       <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" data-static-onclick="s10">Мои результаты</div>
-      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Журнал записи</div>
+      <div class="tn" data-p="journal" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Журнал записи</div>
       <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Записи</div>
       <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Пациенты</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Сообщения</div>
@@ -373,13 +374,13 @@
         <div class="sc"><div class="sl">Отмены и неявки</div><div class="sv" id="wdLost">—</div><div class="sd">за сегодня</div></div>
       </div>
       <div class="g32 mb">
-        <div class="card"><div class="ct">Записи на сегодня <a href="#records" class="wd-link" data-static-onclick="s31">Все записи ›</a></div><div id="wdRecords"></div></div>
+        <div id="wdFolderSlot"></div>
         <div class="wd-col">
           <div class="card mb"><div class="ct">Ждут ответа человека <span class="wd-count" id="wdEscN">—</span></div><div id="wdDialogs"></div>
             <div class="wd-foot"><a href="#chat" class="wd-link" data-static-onclick="s32">Все сообщения ›</a></div></div>
           <div class="card mb"><div class="ct">Новые заявки на справки <span class="wd-count" id="wdCertN">—</span></div><div id="wdCerts"></div>
             <div class="wd-foot"><a href="#cert-requests" class="wd-link" data-static-onclick="s33">Все заявки ›</a></div></div>
-          <div class="card"><div class="ct">Забота о пациентах</div>
+          <div class="card" id="wdCareCard"><div class="ct">Забота о пациентах</div>
             <div class="wd-sub" style="margin-bottom:10px">Программы касаний после визита и напоминания о повторном визите.</div>
             <a href="#care" class="btn btn-sec btn-sm" data-static-onclick="s34">Открыть «Заботу» ›</a></div>
         </div>
@@ -2653,15 +2654,15 @@
 <script src="js/pages/staff.js?v=2026-06-11a"></script>
 <script src="js/pages/home-care.js?v=2026-11-13p"></script>
 <script src="js/pages/segments.js"></script>
-<script src="js/pages/service-catalog.js?v=20261117-mila-prices"></script>
-<script src="js/pages/journal.js?v=20261116-sidebar"></script>
-<script src="js/pages/journal-toolbar.js?v=2026-11-15-toolbar"></script>
-<script src="js/pages/journal-grid.js?v=2026-11-15-shorten"></script>
-<script src="js/pages/journal-staff-menu.js?v=2026-11-15-toolbar"></script>
-<script src="js/pages/journal-card.js?v=20261117-unified-services"></script>
-<script src="js/pages/journal-forms.js?v=20261117-unified-services"></script>
+<script src="js/pages/service-catalog.js?v=20261118-collapsed"></script>
+<script src="js/pages/journal.js?v=2026-11-24-journal-roles"></script>
+<script src="js/pages/journal-toolbar.js?v=2026-11-24-journal-roles"></script>
+<script src="js/pages/journal-grid.js?v=2026-11-24-journal-roles"></script>
+<script src="js/pages/journal-staff-menu.js?v=2026-11-24-journal-roles"></script>
+<script src="js/pages/journal-card.js?v=2026-11-24-journal-roles"></script>
+<script src="js/pages/journal-forms.js?v=2026-11-24-journal-roles"></script>
 <script src="js/pages/journal-payment.js?v=20261115-inline-goods"></script>
-<script src="js/pages/journal-dispatch.js?v=2026-11-14-staff-final"></script>
+<script src="js/pages/journal-dispatch.js?v=2026-11-24-journal-roles"></script>
 <script src="js/pages/journal-stock.js?v=20261116-goods-filters"></script>
 <script src="js/pages/journal-visits.js?v=20261115-client-sections"></script>
 <script src="js/pages/journal-loyalty.js?v=20261115-client-sections"></script>
@@ -2679,8 +2680,8 @@
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-11-08p"></script>
 <script src="js/pages/users.js"></script>
-<script src="js/pages/clients.js?v=2026-11-14-stock-final"></script>
-<script src="js/pages/workday.js?v=2026-11-08p"></script>
+<script src="js/pages/clients.js?v=2026-11-24-paper-folders"></script>
+<script src="js/pages/workday.js?v=2026-11-24-cashier-workday"></script>
 <script src="js/pages/dashboard.js?v=2026-11-06f"></script>
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/dashboard-verdicts.js?v=2026-11-06c"></script>

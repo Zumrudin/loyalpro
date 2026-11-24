@@ -175,6 +175,7 @@ async function openCD(id) {
         <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${Number(c.visits_count)||0}</div></div>
       </div>
       ${cardBlock}
+      <div class="card pf-client" id="cdPaperFolder">${cdPaperFolderHtml(c.id, c.paper_folder)}</div>
       <div class="div"></div>
       <div class="fg"><label class="fl">Ручная корректировка</label>
         <div style="display:flex;gap:7px">
@@ -193,6 +194,7 @@ async function openCD(id) {
       <div id="cardTxnsBlock_${cId(c.id)}"></div>
       <div id="cdPurchases_${cId(c.id)}"></div><div id="edClientBlock_${cId(c.id)}"></div>`;
 
+    cdBindPaperFolder(c.id);
     openModal('clientModal');
     cdLoadPurchases(c.id);
     // «Документы» (edocs.js): блок рисуется, только если модуль включён в салоне.
@@ -326,3 +328,78 @@ async function cdLoadPurchases(id) {
   catch (_) { if(document.getElementById('cdPurchases_'+id)===el)el.textContent='Покупки: —'; }
 }
 function cdOpenPurchase(id) { closeModal('clientModal');location.hash='stock/doc/'+Number(id);navTo('stock',{keepHash:true}); }
+
+
+function cdPaperFolderHtml(id, folder) {
+  const f = folder || {};
+  const number = Number(f.number);
+  return `<div class="ct">Бумажная папка: ${Number.isInteger(number) && number > 0 ? '№ ' + number : 'номер не назначен'}</div>
+    <label><input type="checkbox" id="cdPaperArchive" ${f.archived ? 'checked disabled' : ''}> Архив</label>
+    <div class="wd-sub">${f.archived ? 'Архив снимается автоматически после состоявшегося полностью оплаченного визита.' : ''} ${f.prepared ? 'Пакет создан.' : 'Пакет ещё не создан.'} Номер назначается автоматически при записи. При переносе в архив освободите папку от бумаг.</div>
+    ${f.archived && f.number ? '<button type="button" class="btn btn-sec btn-sm" id="cdPaperReturn">Убрать подготовленный пакет</button>' : ''}
+    ${f.archived && f.archivedAt ? '<div class="wd-sub">В архиве с ' + esc(new Date(f.archivedAt).toLocaleDateString('ru', { timeZone: 'Europe/Moscow' })) + '</div>' : ''}
+    ${!f.archived && !f.number ? `<details><summary>Зарегистрировать существующую бумажную папку</summary>
+      <label for="cdPaperNumber">Номер уже используемой папки (1–2000)</label>
+      <input type="number" min="1" max="2000" step="1" id="cdPaperNumber">
+      <button type="button" class="btn btn-sec btn-sm" id="cdPaperNumberSave">Сохранить номер</button></details>` : ''}`;
+}
+
+function cdBindPaperFolder(id) {
+  const checkbox = document.getElementById('cdPaperArchive');
+  if (checkbox) checkbox.addEventListener('change', () => cdSetPaperArchive(id, checkbox));
+  const save = document.getElementById('cdPaperNumberSave');
+  if (save) save.addEventListener('click', () => cdRegisterPaperNumber(id, save));
+  const returnButton = document.getElementById('cdPaperReturn');
+  if (returnButton) returnButton.addEventListener('click', () => cdReturnPaperFolder(id, returnButton));
+}
+
+async function cdSetPaperArchive(id, checkbox) {
+  const archived = checkbox.checked;
+  if (archived && !confirm('Бумаги пациента вынуты из папки и перенесены в архив? Номер будет освобождён для другого пациента.')) {
+    checkbox.checked = false;
+    return;
+  }
+  checkbox.disabled = true;
+  try {
+    const result = await api('PATCH', '/api/clients/' + cId(id) + '/paper-folder', { archived });
+    // Do not update a different client card opened while the request was running.
+    if (document.getElementById('cdPaperArchive') === checkbox) {
+      document.getElementById('cdPaperFolder').innerHTML = cdPaperFolderHtml(id, result.paperFolder);
+      cdBindPaperFolder(id);
+    }
+  } catch (e) {
+    checkbox.checked = !archived;
+    notify(e.message, 'err');
+  } finally { checkbox.disabled = false; }
+}
+
+async function cdRegisterPaperNumber(id, button) {
+  const input = document.getElementById('cdPaperNumber');
+  const number = Number(input && input.value);
+  if (!Number.isInteger(number) || number < 1 || number > 2000) {
+    notify('Укажите номер папки от 1 до 2000', 'err');
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await api('PATCH', '/api/clients/' + cId(id) + '/paper-folder', { number });
+    if (document.getElementById('cdPaperNumberSave') === button) {
+      document.getElementById('cdPaperFolder').innerHTML = cdPaperFolderHtml(id, result.paperFolder);
+      cdBindPaperFolder(id);
+    }
+  } catch (e) { notify(e.message, 'err'); }
+  finally { button.disabled = false; }
+}
+
+async function cdReturnPaperFolder(id, button) {
+  if (!confirm('Бумаги пациента вынуты из папки и перенесены в архив? Номер будет освобождён для другого пациента.')) return;
+  button.disabled = true;
+  try {
+    const result = await api('PATCH', '/api/clients/' + cId(id) + '/paper-folder', { archived: true });
+    if (document.getElementById('cdPaperReturn') === button) {
+      document.getElementById('cdPaperFolder').innerHTML = cdPaperFolderHtml(id, result.paperFolder);
+      cdBindPaperFolder(id);
+    }
+  } catch (e) { notify(e.message, 'err'); }
+  finally { button.disabled = false; }
+}

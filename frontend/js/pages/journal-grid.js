@@ -14,6 +14,7 @@ function jrCellState(staff, minute, date, records, now = Date.now(), cellMinutes
   return 'free';
 }
 function jrGridCreate(staffId, time, date) {
+  if (!jrCanEditJournal()) return;
   if (!journal.data) return;
   const day = journal.view === 'week' && journal.week ? journal.week.days.find(d => d.date === date) : null;
   const staff = day ? { id: journal.week.staff.id, workRanges: day.workRanges || [] } : jrStaffList().find(s => s.id === staffId);
@@ -85,7 +86,7 @@ function jrColumnHtml(s, date, records, allRecords, start, end, now) {
     const state = jrCellState(s, t, date, allRecords, now, step), time = jrTimeLabel(t);
     const position = `top:${(t - start) * pxPerMin}px;height:${step * pxPerMin}px`;
     const classes = `jr-cell jr-cell-${state}${t % 60 === 0 ? ' jr-cell-hour' : ''}`;
-    cells += state === 'free'
+    cells += state === 'free' && jrCanEditJournal()
       ? `<button type="button" class="${classes}" data-staff="${s.id}" data-date="${date}" data-time="${time}" style="${position}" aria-label="${jrEscape(time + ' — новая запись, ' + (s.name || ''))}"><span>${time} Новый сеанс</span></button>`
       : `<div class="${classes}" style="${position}" aria-hidden="true">${state === 'break' && prev !== 'break' ? '<span>Перерыв</span>' : ''}</div>`;
     prev = state;
@@ -224,7 +225,7 @@ function jrDragAllowed(r) {
 // session, while the grid keeps deleted, continued, locked, and malformed cards
 // inert.
 function jrResizeAllowed(r) {
-  return !!r && !r.continued && !r.deleted && !jrLocked(r) && /^\d\d:\d\d$/.test(r.time || '');
+  return jrCanEditJournal() && !!r && !r.continued && !r.deleted && !jrLocked(r) && /^\d\d:\d\d$/.test(r.time || '');
 }
 // Visits of one column's date: in the week a continuation on the next day has
 // the SAME id as the original, so the id alone picks the wrong block.
@@ -368,6 +369,7 @@ async function jrDragEnd(ev) {
 }
 // Same session endpoint as the forms; saved locally, sent by «Отправить в YClients».
 async function jrDragSave(body) {
+  if (!jrCanEditJournal()) return false;
   try {
     await jrApi('sessions', body);
     notify('Сохранено в журнале.');

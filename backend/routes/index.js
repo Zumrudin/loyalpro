@@ -13,7 +13,13 @@ function apiAuthGuard(req, res, next) {
       const prefixes = req.user.role === 'admin_cashier'
         ? config.CASHIER_ALLOWED_PREFIXES
         : config.SPECIALIST_ALLOWED_PREFIXES;
-      const allowed = prefixes.some(p => fullPath.startsWith(p));
+      // Workday needs the records summary and the preparation checkbox, not
+      // unrestricted client access (which also exposes manual bonus writes).
+      const cashierWorkday = req.user.role === 'admin_cashier' && (
+        (req.method === 'GET' && fullPath === '/api/records') ||
+        (req.method === 'PATCH' && /^\/api\/clients\/[1-9]\d*\/paper-folder$/.test(fullPath))
+      );
+      const allowed = cashierWorkday || prefixes.some(p => fullPath.startsWith(p));
       if (!allowed) return res.status(403).json({ error: 'Нет доступа' });
     }
     next();
@@ -79,6 +85,7 @@ function mountRoutes(app) {
 
   // ── Clients CRUD at /api/clients (has /:id — must be specific prefix) ──
   app.use('/api/clients',           require('./clients'));
+  app.use('/api/paper-folders',     require('./paper-folders'));
 
   // ── Staff analytics, goods-sales, services-config, csv-import ──
   app.use('/api',                   require('./staff'));

@@ -21,10 +21,21 @@ function call(method, url, { user = { role: 'owner', salonId: 3, userId: 4 }, qu
   });
 }
 beforeEach(() => jest.clearAllMocks());
-test.each(['specialist','admin_cashier','unknown'])('rejects %s on reads and writes', async role => {
+test.each(['unknown'])('rejects %s on reads and writes', async role => {
   expect((await call('GET', '/day', { user: { role } })).status).toBe(403);
   expect((await call('POST', '/create', { user: { role } })).status).toBe(403);
   expect(service.day).not.toHaveBeenCalled(); expect(service.mutate).not.toHaveBeenCalled();
+});
+test.each(['specialist','admin_cashier'])('%s can read the journal with role capabilities', async role => {
+  service.day.mockResolvedValue({ records: [] });
+  const result = await call('GET', '/day', { user: { role, salonId: 3 }, query: { date: '2030-04-01' } });
+  expect(result.status).toBe(200);
+  expect(result.body.capabilities).toMatchObject({ canEdit: role === 'admin_cashier', canViewPhones: role === 'admin_cashier' });
+  expect(service.day).toHaveBeenCalledWith(3, '2030-04-01');
+});
+test('specialist writes are denied before draft parsing or integration', async () => {
+  expect((await call('POST', '/create', { user: { role: 'specialist', salonId: 3 }, body: { role: 'owner' } })).status).toBe(403);
+  expect(service.mutate).not.toHaveBeenCalled();
 });
 test('requires auth', async () => expect((await call('GET', '/day', { user: null })).status).toBe(401));
 test('day summary scopes by JWT, validates date, restricts role, and sanitizes errors', async () => {
@@ -38,8 +49,9 @@ test('day summary scopes by JWT, validates date, restricts role, and sanitizes e
   summary.load.mockClear();
   expect((await call('GET','/day-summary',{query:{date:'2030-02-30'}})).status).toBe(400);
   expect((await call('GET','/day-summary',{query,user:null})).status).toBe(401);
-  expect((await call('GET','/day-summary',{query,user:{role:'specialist',salonId:3}})).status).toBe(403);
   expect(summary.load).not.toHaveBeenCalled();
+  expect((await call('GET','/day-summary',{query,user:{role:'specialist',salonId:3}})).status).toBe(200);
+  expect(summary.load).toHaveBeenCalledWith(3,'2030-04-02');
   summary.load.mockRejectedValue(new Error('synthetic-private-error'));
   const failed = await call('GET','/day-summary',{query});
   expect(failed.status).toBe(502);
@@ -91,7 +103,7 @@ test('payment form ?local=1 reads the local loader, accepts queued negative ids'
  const payments=require('./services/journal/payments');
  const local=require('./services/journal/payments-local');
  local.localPaymentOptions.mockResolvedValue({local:true});
- expect((await call('GET','/payments/-7',{query:{local:'1'}})).body).toEqual({local:true});
+ expect((await call('GET','/payments/-7',{query:{local:'1'}})).body).toEqual({local:true,capabilities:{canEdit:true,canViewPhones:true,canUseClientTools:true,canManageSchedule:true}});
  expect(local.localPaymentOptions).toHaveBeenCalledWith(3,-7);
  expect(payments.options).not.toHaveBeenCalled();
  expect((await call('GET','/payments/-7')).status).toBe(400);
@@ -108,7 +120,7 @@ test('week and month: validated input, tenant from JWT', async () => {
   expect((await call('GET', '/week', { query: { date: 'x' } })).status).toBe(400);
   expect((await call('GET', '/month', { query: { month: '2030-04' } })).status).toBe(200);
   expect(month.month).toHaveBeenCalledWith(3, '2030-04');
-  expect((await call('GET', '/week', { user: { role: 'specialist' }, query: { date: '2030-04-01' } })).status).toBe(403);
+  expect((await call('GET', '/week', { user: { role: 'specialist', salonId: 3 }, query: { date: '2030-04-01' } })).status).toBe(200);
 });
 
 test('record history: id validated, tenant from JWT', async () => {
@@ -121,12 +133,13 @@ test('record history: id validated, tenant from JWT', async () => {
   expect((await call('GET', '/records/abc/history')).status).toBe(400);
 });
 
-test('record history denies anonymous and specialist access and ignores a requested tenant', async () => {
+test('record history denies anonymous, permits specialist read, and ignores a requested tenant', async () => {
   const history = require('./services/journal/history');
   history.load.mockResolvedValue({ recordId: 8, events: [] });
   expect((await call('GET', '/records/8/history', { user: null })).status).toBe(401);
-  expect((await call('GET', '/records/8/history', { user: { role: 'specialist', salonId: 3 } })).status).toBe(403);
   expect(history.load).not.toHaveBeenCalled();
+  expect((await call('GET', '/records/8/history', { user: { role: 'specialist', salonId: 3 } })).status).toBe(200);
+  expect(history.load).toHaveBeenCalledWith(3, 8);
   expect((await call('GET', '/records/8/history', { query: { salonId: 999 } })).status).toBe(200);
   expect(history.load).toHaveBeenCalledWith(3, 8);
 });
@@ -137,7 +150,7 @@ test('client summary: tenant from JWT, query passed as is (validated in the modu
   const res = await call('GET', '/clients/summary', { query: { phone: '79200255591', salonId: 99 } });
   expect(res.status).toBe(200); expect(res.headers['Cache-Control']).toBe('no-store');
   expect(cs.summary).toHaveBeenCalledWith(3, expect.objectContaining({ phone: '79200255591' }));
-  expect((await call('GET', '/clients/summary', { user: { role: 'admin_cashier' }, query: { phone: '79200255591' } })).status).toBe(403);
+  expect((await call('GET', '/clients/summary', { user: { role: 'admin_cashier', salonId: 3 }, query: { phone: '79200255591' } })).status).toBe(200);
 });
 
 const schedule = require('./services/journal/staff-schedule');

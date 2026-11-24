@@ -1,0 +1,21 @@
+/* Reusable physical folders: staff preparation panel and client card. */
+.pf-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:14px 0 10px; }
+.pf-toolbar label { font-size:13px; color:var(--t2); }
+.pf-toolbar input { width:auto; }
+.pf-day > .wd-sub { margin:8px 0; line-height:1.6; }
+.pf-day #wdFolderCounts { padding:10px 12px; background:var(--bg); border-radius:8px; }
+.pf-day #wdFolderCounts:empty { display:none; }
+.pf-number { min-width:76px; font-variant-numeric:tabular-nums; font-weight:600; }
+.pf-prepared { display:flex; align-items:center; gap:6px; white-space:nowrap; font-size:12px; color:var(--t2); }
+.pf-prepared input, .pf-client input[type=checkbox] { width:auto; accent-color:var(--a); }
+.pf-client .wd-sub { line-height:1.6; margin:8px 0; }
+.pf-client details { margin-top:12px; font-size:13px; }
+.pf-client summary { cursor:pointer; color:var(--t2); }
+.pf-client details label { display:block; margin:12px 0 6px; }
+.pf-client details input { max-width:150px; margin-right:8px; }
+@media (max-width:640px) {
+  .pf-row { flex-wrap:wrap; gap:10px; }
+  .pf-row .wd-main { flex:1; min-width:140px; }
+  .pf-prepared { margin-left:auto; }
+  .pf-number { min-width:60px; font-size:12px; }
+}

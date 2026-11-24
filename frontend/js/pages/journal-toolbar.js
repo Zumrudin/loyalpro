@@ -103,7 +103,7 @@ function jrToolbarDate(value) {
 function jrToolbarEscape(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function jrToolbarSummarySync() {
   const button = document.getElementById('jrSummaryPlus');
-  if (button) button.disabled = !(journal.data && Array.isArray(journal.data.staff) && journal.data.staff.length);
+  if (button) { button.hidden = typeof jrCanEditJournal !== 'function' || !jrCanEditJournal(); button.disabled = button.hidden || !(journal.data && Array.isArray(journal.data.staff) && journal.data.staff.length); }
 }
 async function jrSummaryLoad(date) {
   const selected = String(date || document.getElementById('jrDate')?.value || '');
